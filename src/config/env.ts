@@ -1,0 +1,99 @@
+/**
+ * Environment configuration — validated once, at startup, and frozen.
+ *
+ * A missing or malformed variable kills the process here with a readable message rather than
+ * surfacing as an undefined deep inside a request three days later.
+ */
+
+import 'dotenv/config';
+import { z } from 'zod';
+
+const durationPattern = /^\d+[smhd]$/;
+
+const envSchema = z.object({
+  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  PORT: z.coerce.number().int().positive().default(5100),
+
+  MONGODB_URI: z.string().min(1, 'MONGODB_URI is required'),
+  MONGODB_DB_NAME: z.string().min(1).default('pos_wholesale'),
+
+  APP_TIMEZONE: z.string().min(1).default('Asia/Dhaka'),
+  DEFAULT_CURRENCY: z.string().length(3).default('BDT'),
+
+  JWT_ACCESS_SECRET: z.string().min(32, 'JWT_ACCESS_SECRET must be at least 32 characters'),
+  JWT_ACCESS_TTL: z.string().regex(durationPattern, 'e.g. 15m').default('15m'),
+  JWT_REFRESH_SECRET: z.string().min(32, 'JWT_REFRESH_SECRET must be at least 32 characters'),
+  JWT_REFRESH_TTL: z.string().regex(durationPattern, 'e.g. 30d').default('30d'),
+  BCRYPT_ROUNDS: z.coerce.number().int().min(10).max(15).default(12),
+
+  CORS_ORIGINS: z.string().default('http://localhost:5174'),
+  RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+  RATE_LIMIT_MAX: z.coerce.number().int().positive().default(300),
+  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('debug'),
+
+  UPLOAD_DRIVER: z.enum(['local', 'cloudinary']).default('local'),
+  UPLOAD_DIR: z.string().default('./uploads'),
+
+  SEED_ADMIN_EMAIL: z.string().email().optional(),
+  SEED_ADMIN_PASSWORD: z.string().optional(),
+});
+
+const parsed = envSchema.safeParse(process.env);
+
+if (!parsed.success) {
+  const lines = parsed.error.issues.map((i) => `  • ${i.path.join('.')}: ${i.message}`);
+  // Deliberately console, not the logger — the logger depends on this module.
+  console.error(`\nInvalid environment configuration:\n${lines.join('\n')}\n`);
+  console.error('Copy .env.example to .env and fill in the missing values.\n');
+  process.exit(1);
+}
+
+const raw = parsed.data;
+
+export const config = Object.freeze({
+  env: raw.NODE_ENV,
+  isProduction: raw.NODE_ENV === 'production',
+  isTest: raw.NODE_ENV === 'test',
+  port: raw.PORT,
+
+  db: {
+    uri: raw.MONGODB_URI,
+    name: raw.MONGODB_DB_NAME,
+  },
+
+  locale: {
+    timezone: raw.APP_TIMEZONE,
+    currency: raw.DEFAULT_CURRENCY,
+  },
+
+  jwt: {
+    accessSecret: raw.JWT_ACCESS_SECRET,
+    accessTtl: raw.JWT_ACCESS_TTL,
+    refreshSecret: raw.JWT_REFRESH_SECRET,
+    refreshTtl: raw.JWT_REFRESH_TTL,
+  },
+
+  bcryptRounds: raw.BCRYPT_ROUNDS,
+
+  http: {
+    corsOrigins: raw.CORS_ORIGINS.split(',')
+      .map((o) => o.trim())
+      .filter(Boolean),
+    rateLimitWindowMs: raw.RATE_LIMIT_WINDOW_MS,
+    rateLimitMax: raw.RATE_LIMIT_MAX,
+  },
+
+  logLevel: raw.LOG_LEVEL,
+
+  uploads: {
+    driver: raw.UPLOAD_DRIVER,
+    dir: raw.UPLOAD_DIR,
+  },
+
+  seed: {
+    adminEmail: raw.SEED_ADMIN_EMAIL ?? null,
+    adminPassword: raw.SEED_ADMIN_PASSWORD ?? null,
+  },
+});
+
+export type Config = typeof config;
