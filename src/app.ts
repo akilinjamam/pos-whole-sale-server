@@ -8,10 +8,14 @@ import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import { pinoHttp } from 'pino-http';
 
+import type { StdSerializedResults } from 'pino-http';
+
 import { config } from './config/env.js';
 import { logger } from './config/logger.js';
+import { authenticateUnlessPublic } from './middleware/authenticate.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
-import { allRoutes } from './routes/index.js';
+import { allRoutes, publicPaths } from './routes/index.js';
+import rootRouter from './routes/root.js';
 
 export function createApp(): Express {
   const app = express();
@@ -30,6 +34,41 @@ export function createApp(): Express {
       },
       // Health polls every few seconds from the client Home page; do not flood the log.
       autoLogging: { ignore: (req) => req.url?.startsWith('/api/v1/health') ?? false },
+
+      /**
+       * Log every request, but only the part anyone reads.
+       *
+       * pino-http's defaults serialise the whole header block, which for a browser hit means
+       * ~40 lines: Chrome's `sec-ch-ua` / `sec-fetch-*` / `accept-language`, every header helmet
+       * sets (CSP, HSTS, `x-frame-options`, …), `etag`, `vary`. One page refresh buries whatever
+       * you were actually looking at. Method, url, status and timing answer the question; the
+       * headers almost never do.
+       *
+       * `wrapSerializers` defaults to true in pino-http, so these receive the **already
+       * serialised** request and response — hence `r.remoteAddress`, not `r.socket.remoteAddress`.
+       *
+       * The `err` serializer is deliberately left at its default: it is what makes a 500
+       * debuggable, and nothing here should touch it.
+       */
+      serializers: {
+        req: (r: StdSerializedResults['req']) => ({
+          // Keep `id`. errorHandler puts this same value into the failure envelope as
+          // `requestId`, and that correlation is the only way to tie an error a user reports
+          // back to its line in the log.
+          id: r.id,
+          method: r.method,
+          url: r.url,
+          remoteAddress: r.remoteAddress,
+          // Opt back in with LOG_HTTP_HEADERS=true when debugging CORS or an auth failure.
+          // The logger's `redact` paths cover authorization and cookie on this route again
+          // the moment the headers reappear.
+          ...(config.logHttpHeaders ? { headers: r.headers } : {}),
+        }),
+        res: (r: StdSerializedResults['res']) => ({
+          statusCode: r.statusCode,
+          ...(config.logHttpHeaders ? { headers: r.headers } : {}),
+        }),
+      },
     }),
   );
 
@@ -56,8 +95,17 @@ export function createApp(): Express {
     }),
   );
 
-  // From Day 2, a blanket `authenticate` guard mounts here with `publicPaths` exempted, so a
-  // route that forgets its own guard is still protected.
+  // The service banner, before the auth guard so the base URL answers without a token. The
+  // router defines only `/`, so `/api/v1/users` does not match it and falls straight through
+  // to the guard below — mounting it here widens nothing.
+  app.use('/', rootRouter);
+  app.use('/api/v1', rootRouter);
+
+  // Defence in depth. Every route also declares `authenticate` itself — and Day 3's coverage
+  // test fails the build if one does not — but this blanket guard means that in the window
+  // between writing a route and running that test, an unguarded endpoint is still not
+  // anonymous. `publicPaths` is the explicit, deliberately tiny exemption list.
+  app.use('/api/v1', authenticateUnlessPublic(publicPaths));
 
   for (const { path, route } of allRoutes) {
     app.use(`/api/v1/${path}`, route);

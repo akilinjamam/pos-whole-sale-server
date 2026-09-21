@@ -1,6 +1,11 @@
 import type { Router } from 'express';
 
+import authRouter from '../modules/auth/auth.route.js';
 import healthRouter from '../modules/health/health.route.js';
+import locationRouter from '../modules/location/location.route.js';
+import orgRouter from '../modules/org/org.route.js';
+import roleRouter from '../modules/role/role.route.js';
+import userRouter from '../modules/user/user.route.js';
 
 /**
  * The route table. Every module's router is mounted at `/api/v1/<path>` from this array —
@@ -19,11 +24,19 @@ export interface RouteEntry {
 export const allRoutes: RouteEntry[] = [
   { path: 'health', route: healthRouter, public: true },
 
-  // Day 2 onwards:
-  // { path: 'auth',     route: authRouter, public: true },
-  // { path: 'users',    route: userRouter },
-  // { path: 'roles',    route: roleRouter },
-  // { path: 'locations', route: locationRouter },
+  // Exempt from the *blanket* guard because `login` and `refresh` must be reachable without a
+  // token — obtaining one is their purpose. The routes inside that do need a caller (`me`,
+  // `logout`, `password`) carry `authenticate` themselves.
+  { path: 'auth', route: authRouter, public: true },
+
+  { path: 'org', route: orgRouter },
+  { path: 'locations', route: locationRouter },
+  { path: 'roles', route: roleRouter },
+  { path: 'users', route: userRouter },
+
+  // Day 5 onwards:
+  // { path: 'brands',   route: brandRouter },
+  // { path: 'products', route: productRouter },
   // …
 ];
 

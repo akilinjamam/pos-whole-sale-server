@@ -1,0 +1,76 @@
+import { config } from '../../config/env.js';
+import { ApiError } from '../../lib/ApiError.js';
+import { asyncHandler } from '../../lib/asyncHandler.js';
+import { actorIdOf, requireAuth } from '../../lib/requestUser.js';
+import { ttlToSeconds } from '../../lib/tokens.js';
+import { sendData, sendNoContent } from '../../lib/respond.js';
+
+import * as authService from './auth.service.js';
+
+import type { LoginInput, RefreshInput } from './auth.schema.js';
+import type { ChangePasswordInput } from '../user/user.schema.js';
+import type { Response } from 'express';
+
+const REFRESH_COOKIE = 'refreshToken';
+
+/**
+ * The refresh token also goes out as an httpOnly cookie.
+ *
+ * The response body carries it too, because the POS counter terminal keeps its tokens in
+ * memory rather than relying on cookies. The cookie is the better channel where it works —
+ * httpOnly puts the long-lived credential out of reach of any XSS on the page — so both are
+ * offered and the client picks.
+ */
+function setRefreshCookie(res: Response, token: string): void {
+  res.cookie(REFRESH_COOKIE, token, {
+    httpOnly: true,
+    secure: config.isProduction,
+    sameSite: 'lax',
+    path: '/api/v1/auth',
+    maxAge: ttlToSeconds(config.jwt.refreshTtl) * 1000,
+  });
+}
+
+function clearRefreshCookie(res: Response): void {
+  res.clearCookie(REFRESH_COOKIE, { path: '/api/v1/auth' });
+}
+
+export const login = asyncHandler(async (req, res) => {
+  const input = req.body as LoginInput;
+  const result = await authService.login(input);
+
+  setRefreshCookie(res, result.refreshToken);
+  sendData(res, result);
+});
+
+export const refresh = asyncHandler(async (req, res) => {
+  const body = req.body as RefreshInput;
+  const cookies = (req.cookies ?? {}) as Record<string, string | undefined>;
+  const token = body.refreshToken ?? cookies[REFRESH_COOKIE];
+
+  if (!token) throw ApiError.unauthenticated('No refresh token supplied');
+
+  const tokens = await authService.refresh(token);
+  setRefreshCookie(res, tokens.refreshToken);
+  sendData(res, tokens);
+});
+
+export const logout = asyncHandler(async (req, res) => {
+  await authService.logout(actorIdOf(req));
+  clearRefreshCookie(res);
+  sendNoContent(res);
+});
+
+export const me = asyncHandler(async (req, res) => {
+  // Served from the freshly re-derived `req.user` that `authenticate` just built, so this is
+  // always current — it is how the client picks up a role change without logging out.
+  sendData(res, requireAuth(req));
+});
+
+export const changePassword = asyncHandler(async (req, res) => {
+  const input = req.body as ChangePasswordInput;
+  const tokens = await authService.changeOwnPassword(actorIdOf(req), input);
+
+  setRefreshCookie(res, tokens.refreshToken);
+  sendData(res, tokens);
+});

@@ -191,6 +191,11 @@ export type DocSeries = Member<typeof DOC_SERIES>;
 export const ERROR_CODES = [
   'VALIDATION_FAILED',
   'UNAUTHENTICATED',
+  // Distinct from UNAUTHENTICATED so the client's interceptor can tell "refresh me" apart
+  // from "log out" — a seamless renewal versus bouncing a cashier out mid-sale.
+  'TOKEN_EXPIRED',
+  'INVALID_CREDENTIALS',
+  'ACCOUNT_DISABLED',
   'FORBIDDEN',
   'NOT_FOUND',
   'DUPLICATE_DOCUMENT',

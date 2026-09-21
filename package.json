@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Optical wholesale ERP + POS \u2014 REST API (Express + Mongoose, TypeScript)",
+  "description": "Optical wholesale ERP + POS — REST API (Express + Mongoose, TypeScript)",
   "engines": {
     "node": ">=20"
   },
@@ -11,13 +11,14 @@
     "dev": "nodemon",
     "build": "tsc -p tsconfig.json && tsc-alias -p tsconfig.json",
     "start": "node dist/index.js",
+    "seed": "tsx src/db/seed/index.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint \"src/**/*.ts\" --max-warnings 0",
     "format": "prettier --write \"src/**/*.ts\"",
     "test": "vitest run",
     "test:watch": "vitest",
     "check:shared": "node check-shared.mjs",
-    "verify": "npm run check:shared && npm run typecheck && npm run lint",
+    "verify": "npm run check:shared && npm run typecheck && npm run lint && npm test",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
     "db:init": "docker compose exec mongo mongosh --port 27018 --eval 'rs.initiate({_id:\"rs0\",members:[{_id:0,host:\"localhost:27018\"}]})'",
@@ -42,6 +43,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
+    "@types/bcryptjs": "^2.4.6",
     "@types/compression": "^1.7.5",
     "@types/cookie-parser": "^1.4.8",
     "@types/cors": "^2.8.17",

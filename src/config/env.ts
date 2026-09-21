@@ -30,6 +30,16 @@ const envSchema = z.object({
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(300),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('debug'),
+  /**
+   * Put the full header block back into the HTTP log — the one thing the trimmed serializers
+   * in app.ts drop. Its own flag rather than a LOG_LEVEL check, because LOG_LEVEL is already
+   * `debug` in development, so gating on the level would mean "always on" exactly where the
+   * noise is the problem. Turn it on for an afternoon of debugging CORS or auth, then off.
+   */
+  LOG_HTTP_HEADERS: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
 
   UPLOAD_DRIVER: z.enum(['local', 'cloudinary']).default('local'),
   UPLOAD_DIR: z.string().default('./uploads'),
@@ -84,6 +94,7 @@ export const config = Object.freeze({
   },
 
   logLevel: raw.LOG_LEVEL,
+  logHttpHeaders: raw.LOG_HTTP_HEADERS,
 
   uploads: {
     driver: raw.UPLOAD_DRIVER,
