@@ -67,6 +67,11 @@ export const me = asyncHandler(async (req, res) => {
   sendData(res, requireAuth(req));
 });
 
+/** The caller's own accessible locations — the topbar switcher. See the service for why. */
+export const myLocations = asyncHandler(async (req, res) => {
+  sendData(res, await authService.myLocations(requireAuth(req)));
+});
+
 export const changePassword = asyncHandler(async (req, res) => {
   const input = req.body as ChangePasswordInput;
   const tokens = await authService.changeOwnPassword(actorIdOf(req), input);

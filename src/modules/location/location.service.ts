@@ -18,6 +18,9 @@ import type { FilterQuery } from 'mongoose';
 /** Sortable fields, whitelisted — `paginate` ignores anything outside this list. */
 const SORTABLE = ['code', 'name', 'type', 'sortOrder', 'createdAt'] as const;
 
+/** What the search box looks at. See `searchFields` in `lib/paginate.ts`. */
+const SEARCHABLE = ['code', 'name', 'address'] as const;
+
 /**
  * Reads are scoped twice: by `orgId` from the token, and — for a user with an explicit
  * location list — to their own locations. A store keeper assigned to one warehouse has no
@@ -47,6 +50,7 @@ export async function listLocations(
     filter,
     query,
     sortable: SORTABLE,
+    searchFields: SEARCHABLE,
     defaultSort: { sortOrder: 1, code: 1 },
   });
 

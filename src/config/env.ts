@@ -46,6 +46,18 @@ const envSchema = z.object({
 
   SEED_ADMIN_EMAIL: z.string().email().optional(),
   SEED_ADMIN_PASSWORD: z.string().optional(),
+
+  /**
+   * Create one demo account per system role (storekeeper@…, accounts@…, and so on) so the
+   * difference between the roles can actually be *seen* — which is the whole point of Day 4's
+   * "three roles, three different menus". Refused outright in production below: a known
+   * password on a role that can post stock is not something to leave to a flag.
+   */
+  SEED_DEMO_USERS: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  SEED_DEMO_PASSWORD: z.string().min(8).default('Demo1234!'),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -104,6 +116,10 @@ export const config = Object.freeze({
   seed: {
     adminEmail: raw.SEED_ADMIN_EMAIL ?? null,
     adminPassword: raw.SEED_ADMIN_PASSWORD ?? null,
+    // The `&&` is the guard, not the flag: demo accounts share one published password, so
+    // production must not be able to grow them by setting an environment variable.
+    demoUsers: raw.SEED_DEMO_USERS && raw.NODE_ENV !== 'production',
+    demoPassword: raw.SEED_DEMO_PASSWORD,
   },
 });
 

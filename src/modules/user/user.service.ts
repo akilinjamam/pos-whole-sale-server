@@ -15,6 +15,9 @@ import type { FilterQuery } from 'mongoose';
 
 const SORTABLE = ['name', 'email', 'lastLoginAt', 'createdAt'] as const;
 
+/** What the search box looks at. `phone` included: it is how staff are often looked up. */
+const SEARCHABLE = ['name', 'email', 'phone'] as const;
+
 /**
  * Referential checks the schema cannot do.
  *
@@ -59,6 +62,7 @@ export async function listUsers(
     filter,
     query,
     sortable: SORTABLE,
+    searchFields: SEARCHABLE,
     defaultSort: { name: 1 },
     // The aggregation pipeline bypasses `select: false`, so the hash must be excluded here
     // explicitly. This is the one place in the codebase where that safety net does not apply.

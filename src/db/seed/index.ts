@@ -147,6 +147,60 @@ async function seedAdmin(orgId: Types.ObjectId, ownerRoleId: Types.ObjectId): Pr
   }
 }
 
+/**
+ * One account per system role, so the difference between them can be seen rather than
+ * described. Opt-in (`SEED_DEMO_USERS=true`) and refused in production — see `config.seed`.
+ *
+ * `locationIds` is empty on all of them: the point of these accounts is to demonstrate the
+ * *permission* split, and restricting locations as well would make a missing screen ambiguous
+ * between "this role cannot" and "this user's warehouse cannot".
+ */
+async function seedDemoUsers(
+  orgId: Types.ObjectId,
+  roleIds: Map<string, Types.ObjectId>,
+): Promise<void> {
+  if (!config.seed.demoUsers) return;
+
+  const demos = [
+    { code: 'SALES_MANAGER', email: 'salesmanager@optical.local', name: 'Demo Sales Manager' },
+    { code: 'SALES_REP', email: 'salesrep@optical.local', name: 'Demo Sales Rep' },
+    { code: 'STORE_KEEPER', email: 'storekeeper@optical.local', name: 'Demo Store Keeper' },
+    { code: 'ACCOUNTS', email: 'accounts@optical.local', name: 'Demo Accounts' },
+    { code: 'POS_CASHIER', email: 'cashier@optical.local', name: 'Demo Cashier' },
+  ];
+
+  const created: string[] = [];
+
+  for (const demo of demos) {
+    const roleId = roleIds.get(demo.code);
+    if (!roleId) continue;
+
+    // Same rule as the admin: an existing account's password is never rewritten by a re-seed.
+    if (await User.exists({ orgId, email: demo.email })) continue;
+
+    const user = new User({
+      orgId,
+      name: demo.name,
+      email: demo.email,
+      passwordHash: config.seed.demoPassword, // hashed by the model's pre-save hook
+      roleIds: [roleId],
+      locationIds: [],
+      defaultLocationId: null,
+      isActive: true,
+      mustChangePassword: false,
+    });
+    await user.save();
+    created.push(demo.email);
+  }
+
+  if (created.length > 0) {
+    logger.warn(
+      { users: created, password: config.seed.demoPassword },
+      'Demo users created with a SHARED, KNOWN password — never enable SEED_DEMO_USERS outside development',
+    );
+  }
+}
+
 async function main(): Promise<void> {
   await connectDatabase();
 
@@ -155,8 +209,10 @@ async function main(): Promise<void> {
   await seedLocations(orgId);
 
   const ownerRoleId = roleIds.get('OWNER');
-  if (!ownerRoleId) throw new Error('OWNER role missing after seeding — cannot create the admin');
+  if (!ownerRoleId)
+    throw new Error('OWNER role missing after seeding — cannot create the admin');
   await seedAdmin(orgId, ownerRoleId);
+  await seedDemoUsers(orgId, roleIds);
 
   logger.info('Seed complete');
   await disconnectDatabase();

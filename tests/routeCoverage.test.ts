@@ -100,6 +100,10 @@ const PUBLIC_ROUTES: Record<string, string> = {
  */
 const SELF_SERVICE_ROUTES: Record<string, string> = {
   'auth/me': "Returns the caller's own identity; the token is the authorisation.",
+  'auth/me/locations':
+    "The caller's own accessible locations, for the topbar switcher. Scoped by their " +
+    '`locationIds`, so it discloses nothing they could not already act on — and a cashier ' +
+    'must be able to choose their till without holding `location:read`.',
   'auth/logout': "Ends the caller's own session. A user must always be able to sign out.",
   'auth/password': "Changes the caller's own password, and re-checks the current one itself.",
 };

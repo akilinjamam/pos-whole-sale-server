@@ -1,13 +1,21 @@
-import type { Types } from 'mongoose';
+import { Types } from 'mongoose';
 
 import { ApiError } from '../../lib/ApiError.js';
 import { issueTokens, verifyRefreshToken } from '../../lib/tokens.js';
 import { toAuthUser } from '../../services/identity.service.js';
+import { Location, toLocationPayload } from '../location/location.model.js';
 import { User } from '../user/user.model.js';
 
 import type { LoginInput } from './auth.schema.js';
 import type { ChangePasswordInput } from '../user/user.schema.js';
-import type { AuthUser, LoginResponse, RefreshResponse } from '@shared/types.js';
+import type { LocationDoc } from '../location/location.model.js';
+import type {
+  AuthUser,
+  LocationPayload,
+  LoginResponse,
+  RefreshResponse,
+} from '@shared/types.js';
+import type { FilterQuery } from 'mongoose';
 
 /**
  * A wrong email and a wrong password give the same answer.
@@ -87,6 +95,31 @@ export async function me(userId: Types.ObjectId): Promise<AuthUser> {
   const user = await User.findById(userId);
   if (!user) throw ApiError.unauthenticated();
   return toAuthUser(user);
+}
+
+/**
+ * The locations this caller may work in — what the topbar's location switcher lists.
+ *
+ * Self-service rather than `GET /locations`, for two reasons. A POS cashier needs to pick the
+ * till they are standing at, and gating that behind `location:read` would either lock them out
+ * of their own switcher or force the permission onto every role that can sell. And `AuthUser`
+ * carries only `locationIds` — the switcher needs names, which would otherwise mean either an
+ * extra query on *every* authenticated request (`toAuthUser` runs in `authenticate`) or a
+ * second endpoint the cashier cannot call.
+ *
+ * An empty `user.locationIds` means unrestricted — see `requireLocation` — so it lists them all.
+ */
+export async function myLocations(user: AuthUser): Promise<LocationPayload[]> {
+  const filter: FilterQuery<LocationDoc> = {
+    orgId: new Types.ObjectId(user.orgId),
+    isActive: true,
+  };
+  if (user.locationIds.length > 0) {
+    filter._id = { $in: user.locationIds.map((id) => new Types.ObjectId(id)) };
+  }
+
+  const locations = await Location.find(filter).sort({ sortOrder: 1, name: 1 }).lean();
+  return locations.map(toLocationPayload);
 }
 
 /**

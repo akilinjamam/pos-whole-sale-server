@@ -43,6 +43,10 @@ authRouter.post('/logout', authenticate, ctrl.logout);
 
 authRouter.get('/me', authenticate, ctrl.me);
 
+// Also self-service: the locations *this* caller may work in, for the topbar switcher. A
+// cashier must be able to pick their till without holding `location:read`.
+authRouter.get('/me/locations', authenticate, ctrl.myLocations);
+
 authRouter.post(
   '/password',
   authenticate,

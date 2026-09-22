@@ -11,6 +11,8 @@ import type { FilterQuery, Types } from 'mongoose';
 
 const SORTABLE = ['code', 'name', 'createdAt'] as const;
 
+const SEARCHABLE = ['code', 'name', 'description'] as const;
+
 /**
  * Revoke every token issued to the holders of a role.
  *
@@ -38,6 +40,7 @@ export async function listRoles(
     filter,
     query,
     sortable: SORTABLE,
+    searchFields: SEARCHABLE,
     defaultSort: { code: 1 },
   });
 

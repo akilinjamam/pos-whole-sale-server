@@ -53,7 +53,8 @@ export const SYSTEM_ROLES: readonly SystemRoleSeed[] = [
   {
     code: 'SALES_MANAGER',
     name: 'Sales Manager',
-    description: 'Owns the sell side: dealers, pricing, orders, approvals and credit overrides.',
+    description:
+      'Owns the sell side: dealers, pricing, orders, approvals and credit overrides.',
     permissions: [
       ...all('DEALER', 'CUSTOMER', 'PRICING', 'ORDER', 'DISPATCH', 'INVOICE', 'RETURN'),
       'product:read',
@@ -72,7 +73,8 @@ export const SYSTEM_ROLES: readonly SystemRoleSeed[] = [
   {
     code: 'SALES_REP',
     name: 'Sales Representative',
-    description: 'Takes orders and maintains dealers. No discounting, no price or credit override.',
+    description:
+      'Takes orders and maintains dealers. No discounting, no price or credit override.',
     permissions: [
       'dealer:read',
       'dealer:create',
