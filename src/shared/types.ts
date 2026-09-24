@@ -16,6 +16,7 @@ import type {
   VariantAxis,
 } from './enums.js';
 import type { ProductAttrs } from './catalog.js';
+import type { VariantAxisValues } from './variant.js';
 import type { Permission } from './permissions.js';
 
 // ─── Response envelope ──────────────────────────────────────────────────────────────────
@@ -284,6 +285,28 @@ export interface ProductPayload {
   brandName?: string | null;
   categoryName?: string | null;
 
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * One orderable combination of a product's axes.
+ *
+ * `label` is `describeAxes` applied server-side — "SPH -2.00 CYL -1.25 × 180" — so every screen
+ * renders a variant the same way without each one re-implementing dioptre formatting.
+ */
+export interface VariantPayload {
+  id: string;
+  productId: string;
+  sku: string;
+  /** Canonical and derived: the same axes always produce the same string. */
+  variantKey: string;
+  axes: VariantAxisValues;
+  label: string;
+  barcode: string | null;
+  /** Signed, added to the product's resolved price. */
+  priceDeltaMinor: number;
+  isActive: boolean;
   createdAt: string;
   updatedAt: string;
 }

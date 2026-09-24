@@ -9,6 +9,7 @@ import orgRouter from '../modules/org/org.route.js';
 import productRouter from '../modules/product/product.route.js';
 import roleRouter from '../modules/role/role.route.js';
 import userRouter from '../modules/user/user.route.js';
+import variantRouter from '../modules/variant/variant.route.js';
 
 /**
  * The route table. Every module's router is mounted at `/api/v1/<path>` from this array —
@@ -42,9 +43,10 @@ export const allRoutes: RouteEntry[] = [
   { path: 'brands', route: brandRouter },
   { path: 'categories', route: categoryRouter },
   { path: 'products', route: productRouter },
+  { path: 'variants', route: variantRouter },
 
-  // Day 7 onwards:
-  // { path: 'variants', route: variantRouter },
+  // Day 9 onwards:
+  // { path: 'parties', route: partyRouter },
   // …
 ];
 
