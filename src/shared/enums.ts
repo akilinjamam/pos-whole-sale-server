@@ -22,6 +22,66 @@ export type PackCode = Member<typeof PACK_CODES>;
 export const TRACKING_MODES = ['NONE', 'LOT', 'SERIAL'] as const;
 export type TrackingMode = Member<typeof TRACKING_MODES>;
 
+/**
+ * The axes a product may vary along.
+ *
+ * `Variant.axes` is keyed by these, and `Product.variantAxes` declares which ones a given
+ * product actually uses — lenses vary by power (sph/cyl/axis/add), frames by colour and size.
+ * Shared so the Day-7 variant grid and the server's `variantKey` builder cannot disagree about
+ * the spelling of an axis, which would silently produce two variants for the same thing.
+ */
+export const VARIANT_AXES = ['sph', 'cyl', 'axis', 'add', 'color', 'size'] as const;
+export type VariantAxis = Member<typeof VARIANT_AXES>;
+
+// ─── Catalog: per-type attribute vocabularies ───────────────────────────────────────────
+//
+// These drive the `attrs` union in `catalog.ts` AND the select options in the product form.
+// One declaration, so a value the form can offer is by construction a value the API accepts.
+
+export const LENS_MATERIALS = ['CR39', 'PC', 'MR8', 'GLASS'] as const;
+export type LensMaterial = Member<typeof LENS_MATERIALS>;
+
+export const LENS_DESIGNS = ['SV', 'BIFOCAL', 'PROGRESSIVE', 'OFFICE'] as const;
+export type LensDesign = Member<typeof LENS_DESIGNS>;
+
+export const LENS_COATINGS = ['UC', 'HC', 'HMC', 'BLUECUT', 'DRIVE'] as const;
+export type LensCoating = Member<typeof LENS_COATINGS>;
+
+/** A lens sold as a PAIR is one sellable unit containing two physical lenses. */
+export const LENS_SOLD_AS = ['PAIR', 'PCS'] as const;
+export type LensSoldAs = Member<typeof LENS_SOLD_AS>;
+
+export const FRAME_MATERIALS = [
+  'ACETATE',
+  'METAL',
+  'TITANIUM',
+  'TR90',
+  'ULTEM',
+  'COMBI',
+  'WOOD',
+  'OTHER',
+] as const;
+export type FrameMaterial = Member<typeof FRAME_MATERIALS>;
+
+export const FRAME_SHAPES = [
+  'ROUND',
+  'OVAL',
+  'SQUARE',
+  'RECTANGLE',
+  'CAT_EYE',
+  'AVIATOR',
+  'WAYFARER',
+  'GEOMETRIC',
+  'OTHER',
+] as const;
+export type FrameShape = Member<typeof FRAME_SHAPES>;
+
+export const RIM_TYPES = ['FULL_RIM', 'HALF_RIM', 'RIMLESS'] as const;
+export type RimType = Member<typeof RIM_TYPES>;
+
+export const GENDERS = ['MEN', 'WOMEN', 'UNISEX', 'KIDS'] as const;
+export type Gender = Member<typeof GENDERS>;
+
 // ─── Parties ────────────────────────────────────────────────────────────────────────────
 
 export const PARTY_ROLES = ['DEALER', 'CUSTOMER', 'SUPPLIER'] as const;
@@ -106,14 +166,7 @@ export type SalesChannel = Member<typeof SALES_CHANNELS>;
 export const PAYMENT_STATUSES = ['UNPAID', 'PARTIAL', 'PAID', 'OVERPAID'] as const;
 export type PaymentStatus = Member<typeof PAYMENT_STATUSES>;
 
-export const PAYMENT_METHODS = [
-  'CASH',
-  'BANK',
-  'CHEQUE',
-  'MFS',
-  'CARD',
-  'ADJUSTMENT',
-] as const;
+export const PAYMENT_METHODS = ['CASH', 'BANK', 'CHEQUE', 'MFS', 'CARD', 'ADJUSTMENT'] as const;
 export type PaymentMethod = Member<typeof PAYMENT_METHODS>;
 
 export const MFS_PROVIDERS = ['BKASH', 'NAGAD', 'ROCKET'] as const;

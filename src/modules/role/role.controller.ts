@@ -1,7 +1,11 @@
 import { asyncHandler } from '../../lib/asyncHandler.js';
 import { actorIdOf, orgIdOf, toObjectId } from '../../lib/requestUser.js';
 import { sendCreated, sendData, sendNoContent, sendPage } from '../../lib/respond.js';
-import { PERMISSIONS, PERMISSION_MODULES, PERMISSION_MODULE_LABELS } from '../../shared/permissions.js';
+import {
+  PERMISSIONS,
+  PERMISSION_MODULES,
+  PERMISSION_MODULE_LABELS,
+} from '../../shared/permissions.js';
 
 import * as roleService from './role.service.js';
 
@@ -26,7 +30,12 @@ export const update = asyncHandler(async (req, res) => {
   const input = req.body as UpdateRoleInput;
   sendData(
     res,
-    await roleService.updateRole(orgIdOf(req), toObjectId(req.params.id as string), input, actorIdOf(req)),
+    await roleService.updateRole(
+      orgIdOf(req),
+      toObjectId(req.params.id as string),
+      input,
+      actorIdOf(req),
+    ),
   );
 });
 

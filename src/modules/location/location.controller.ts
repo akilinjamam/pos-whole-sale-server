@@ -12,7 +12,11 @@ import type {
 
 export const list = asyncHandler(async (req, res) => {
   const query = req.query as unknown as ListLocationsQuery;
-  const { items, meta } = await locationService.listLocations(requireAuth(req), orgIdOf(req), query);
+  const { items, meta } = await locationService.listLocations(
+    requireAuth(req),
+    orgIdOf(req),
+    query,
+  );
   sendPage(res, items, meta);
 });
 

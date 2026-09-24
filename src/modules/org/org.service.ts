@@ -45,10 +45,16 @@ export async function updateOrgSettings(
   const set: Record<string, unknown> = { updatedBy: actorId };
   for (const [key, value] of Object.entries(input)) {
     set[`settings.${key}`] =
-      key === 'defaultRetailTierId' && typeof value === 'string' ? new Types.ObjectId(value) : value;
+      key === 'defaultRetailTierId' && typeof value === 'string'
+        ? new Types.ObjectId(value)
+        : value;
   }
 
-  const org = await Org.findByIdAndUpdate(orgId, { $set: set }, { new: true, runValidators: true }).lean();
+  const org = await Org.findByIdAndUpdate(
+    orgId,
+    { $set: set },
+    { new: true, runValidators: true },
+  ).lean();
 
   if (!org) throw ApiError.notFound('Organisation');
   return toOrgPayload(org);

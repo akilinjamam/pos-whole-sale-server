@@ -8,7 +8,12 @@ import { Role } from '../role/role.model.js';
 
 import { User, toUserPayload } from './user.model.js';
 
-import type { CreateUserInput, ListUsersQuery, ResetPasswordInput, UpdateUserInput } from './user.schema.js';
+import type {
+  CreateUserInput,
+  ListUsersQuery,
+  ResetPasswordInput,
+  UpdateUserInput,
+} from './user.schema.js';
 import type { UserDoc } from './user.model.js';
 import type { PageMeta, UserPayload } from '@shared/types.js';
 import type { FilterQuery } from 'mongoose';

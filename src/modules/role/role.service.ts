@@ -24,8 +24,14 @@ const SEARCHABLE = ['code', 'name', 'description'] as const;
  *
  * It is one `updateMany` on an indexed field, which is why it can be afforded on every edit.
  */
-async function revokeTokensForRole(orgId: Types.ObjectId, roleId: Types.ObjectId): Promise<number> {
-  const result = await User.updateMany({ orgId, roleIds: roleId }, { $inc: { tokenVersion: 1 } });
+async function revokeTokensForRole(
+  orgId: Types.ObjectId,
+  roleId: Types.ObjectId,
+): Promise<number> {
+  const result = await User.updateMany(
+    { orgId, roleIds: roleId },
+    { $inc: { tokenVersion: 1 } },
+  );
   return result.modifiedCount;
 }
 

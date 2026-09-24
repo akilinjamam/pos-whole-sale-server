@@ -39,20 +39,18 @@ export interface LocationDoc {
   updatedAt: Date;
 }
 
-const locationSchema = new Schema<LocationDoc>(
-  {
-    ...auditableFields,
-    code: { type: String, required: true, trim: true, uppercase: true },
-    name: { type: String, required: true, trim: true },
-    type: { type: String, required: true, enum: LOCATION_TYPES },
-    address: { type: String, trim: true, default: null },
-    phone: { type: String, trim: true, default: null },
-    allowsSales: { type: Boolean, default: true },
-    allowsPurchase: { type: Boolean, default: true },
-    isActive: { type: Boolean, default: true, index: true },
-    sortOrder: { type: Number, default: 0 },
-  },
-);
+const locationSchema = new Schema<LocationDoc>({
+  ...auditableFields,
+  code: { type: String, required: true, trim: true, uppercase: true },
+  name: { type: String, required: true, trim: true },
+  type: { type: String, required: true, enum: LOCATION_TYPES },
+  address: { type: String, trim: true, default: null },
+  phone: { type: String, trim: true, default: null },
+  allowsSales: { type: Boolean, default: true },
+  allowsPurchase: { type: Boolean, default: true },
+  isActive: { type: Boolean, default: true, index: true },
+  sortOrder: { type: Number, default: 0 },
+});
 
 locationSchema.plugin(baseSchemaPlugin);
 

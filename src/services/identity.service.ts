@@ -28,7 +28,9 @@ async function loadRoles(roleIds: readonly (Types.ObjectId | string)[]): Promise
     .select('code permissions')
     .lean();
 
-  return new Map(roles.map((r) => [String(r._id), { code: r.code, permissions: r.permissions }]));
+  return new Map(
+    roles.map((r) => [String(r._id), { code: r.code, permissions: r.permissions }]),
+  );
 }
 
 export interface ResolvedAccess {
@@ -59,7 +61,9 @@ export async function resolveAccess(user: UserDoc): Promise<ResolvedAccess> {
  * Same resolution for a list of users, with one round trip for all their roles rather than
  * one per user — the users screen would otherwise issue N+1 queries to render a table.
  */
-export async function resolveAccessMany(users: readonly UserDoc[]): Promise<Map<string, ResolvedAccess>> {
+export async function resolveAccessMany(
+  users: readonly UserDoc[],
+): Promise<Map<string, ResolvedAccess>> {
   const allRoleIds = [...new Set(users.flatMap((u) => u.roleIds.map((id) => String(id))))];
   const index = await loadRoles(allRoleIds);
 
@@ -74,7 +78,11 @@ export async function resolveAccessMany(users: readonly UserDoc[]): Promise<Map<
       roleCodes.push(role.code);
     }
     out.set(String(user._id), {
-      permissions: effectivePermissions(fromRoles, user.permissionGrants, user.permissionRevokes),
+      permissions: effectivePermissions(
+        fromRoles,
+        user.permissionGrants,
+        user.permissionRevokes,
+      ),
       roleCodes,
     });
   }

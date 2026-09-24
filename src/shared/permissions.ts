@@ -116,7 +116,13 @@ export const PERMISSIONS = {
     'grn:cancel',
   ],
 
-  RETURN: ['return:read', 'return:create', 'return:approve', 'creditNote:read', 'creditNote:create'],
+  RETURN: [
+    'return:read',
+    'return:create',
+    'return:approve',
+    'creditNote:read',
+    'creditNote:create',
+  ],
 
   POS: [
     'pos:sell',

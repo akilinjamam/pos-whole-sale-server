@@ -32,12 +32,24 @@ export type ValidatedRequest<S extends RequestSchemas> = Request<
 >;
 
 function toFieldErrors(err: ZodError, source: keyof RequestSchemas): ApiFieldError[] {
-  return err.issues.map((issue) => ({
-    // Prefix with the source only for params/query; a body path matches the form field name
-    // exactly, which is what react-hook-form needs to attach the message to the right input.
-    path: source === 'body' ? issue.path.join('.') : [source, ...issue.path].join('.'),
-    message: issue.message,
-  }));
+  // Prefix with the source only for params/query; a body path matches the form field name
+  // exactly, which is what react-hook-form needs to attach the message to the right input.
+  const pathOf = (parts: (string | number)[]) =>
+    source === 'body' ? parts.join('.') : [source, ...parts].join('.');
+
+  return err.issues.flatMap((issue) => {
+    // `.strict()` reports every unknown key as ONE issue with an empty path, so the message
+    // would arrive with nothing to attach it to and the form could only show it as a banner.
+    // Splitting it per key means the offending input is the one that lights up.
+    if (issue.code === 'unrecognized_keys') {
+      return issue.keys.map((key) => ({
+        path: pathOf([...issue.path, key]),
+        message: 'Not accepted by this endpoint',
+      }));
+    }
+
+    return [{ path: pathOf(issue.path), message: issue.message }];
+  });
 }
 
 export function validate<S extends RequestSchemas>(schemas: S): RequestHandler {

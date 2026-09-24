@@ -6,7 +6,16 @@
  * caught up.
  */
 
-import type { ErrorCode, LocationType } from './enums.js';
+import type {
+  BaseUom,
+  ErrorCode,
+  LocationType,
+  PackCode,
+  ProductType,
+  TrackingMode,
+  VariantAxis,
+} from './enums.js';
+import type { ProductAttrs } from './catalog.js';
 import type { Permission } from './permissions.js';
 
 // ─── Response envelope ──────────────────────────────────────────────────────────────────
@@ -190,6 +199,93 @@ export interface RolePayload {
   isSystem: boolean;
   /** How many active users hold this role — the delete guard reads it. */
   userCount?: number;
+}
+
+// ─── Catalog ────────────────────────────────────────────────────────────────────────────
+
+export interface BrandPayload {
+  id: string;
+  name: string;
+  slug: string;
+  logoUrl: string | null;
+  isActive: boolean;
+  /** How many products carry this brand — the delete guard and the list column read it. */
+  productCount?: number;
+}
+
+export interface CategoryPayload {
+  id: string;
+  name: string;
+  parentId: string | null;
+  /** Ancestors, root first, excluding self. `path.length` is the depth. */
+  path: string[];
+  /** Root → self, as names: what a picker shows so two "Men" categories are distinguishable. */
+  breadcrumb: string[];
+  /** Restricts the category to one product type, or null for any. */
+  productType: ProductType | null;
+  isActive: boolean;
+  childCount?: number;
+  productCount?: number;
+}
+
+/** A pack is a multiplier-only alias for the base unit — see §6.5 of the project plan. */
+export interface ProductPackPayload {
+  code: PackCode;
+  name: string;
+  /** Base units per pack. DOZ = 12, CTN = 144. Always an integer ≥ 2. */
+  factor: number;
+  barcode: string | null;
+}
+
+export interface ProductPayload {
+  id: string;
+  sku: string;
+  name: string;
+  type: ProductType;
+  brandId: string | null;
+  categoryId: string | null;
+  description: string | null;
+  images: string[];
+  barcode: string | null;
+
+  baseUom: BaseUom;
+  packs: ProductPackPayload[];
+  trackingMode: TrackingMode;
+
+  hasVariants: boolean;
+  variantAxes: VariantAxis[];
+
+  taxRatePct: number;
+  hsCode: string | null;
+
+  mrpMinor: number;
+  defaultSellPriceMinor: number;
+  /**
+   * Cost fields are **absent** — not null — for a caller without `stock:viewCost`.
+   *
+   * Stripped in the serializer rather than hidden in the UI, so the number never reaches a
+   * browser that should not have it. Optional in the type for exactly that reason: a consumer
+   * is forced to handle their absence.
+   */
+  standardCostMinor?: number;
+  avgCostMinor?: number;
+
+  reorderPoint: number;
+  reorderQty: number;
+  leadTimeDays: number;
+
+  isActive: boolean;
+  isSellableAtCounter: boolean;
+  isSellableWholesale: boolean;
+
+  attrs: ProductAttrs;
+
+  /** Denormalised for the list screen, so it need not load every brand to render a row. */
+  brandName?: string | null;
+  categoryName?: string | null;
+
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface UserPayload {

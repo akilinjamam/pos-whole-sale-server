@@ -1,9 +1,12 @@
 import type { Router } from 'express';
 
 import authRouter from '../modules/auth/auth.route.js';
+import brandRouter from '../modules/brand/brand.route.js';
+import categoryRouter from '../modules/category/category.route.js';
 import healthRouter from '../modules/health/health.route.js';
 import locationRouter from '../modules/location/location.route.js';
 import orgRouter from '../modules/org/org.route.js';
+import productRouter from '../modules/product/product.route.js';
 import roleRouter from '../modules/role/role.route.js';
 import userRouter from '../modules/user/user.route.js';
 
@@ -34,9 +37,14 @@ export const allRoutes: RouteEntry[] = [
   { path: 'roles', route: roleRouter },
   { path: 'users', route: userRouter },
 
-  // Day 5 onwards:
-  // { path: 'brands',   route: brandRouter },
-  // { path: 'products', route: productRouter },
+  // Catalog (Day 5). Reads are gated on `product:read`; brands and categories are written
+  // under their own `*:manage` grants — see each router for why.
+  { path: 'brands', route: brandRouter },
+  { path: 'categories', route: categoryRouter },
+  { path: 'products', route: productRouter },
+
+  // Day 7 onwards:
+  // { path: 'variants', route: variantRouter },
   // …
 ];
 

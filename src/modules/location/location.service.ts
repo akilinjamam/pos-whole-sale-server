@@ -74,7 +74,12 @@ export async function createLocation(
 ): Promise<LocationPayload> {
   // The `{orgId, code}` unique index is the real guard; the duplicate surfaces as a 409 from
   // errorHandler. Checking first as well would only add a race, not remove one.
-  const doc = await Location.create({ ...input, orgId, createdBy: actorId, updatedBy: actorId });
+  const doc = await Location.create({
+    ...input,
+    orgId,
+    createdBy: actorId,
+    updatedBy: actorId,
+  });
   return toLocationPayload(doc.toObject());
 }
 

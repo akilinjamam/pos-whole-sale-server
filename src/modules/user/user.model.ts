@@ -2,7 +2,12 @@ import bcrypt from 'bcryptjs';
 import { Schema, model } from 'mongoose';
 
 import { config } from '../../config/env.js';
-import { auditableFields, baseSchemaPlugin, idToString, idsToStrings } from '../../lib/model.js';
+import {
+  auditableFields,
+  baseSchemaPlugin,
+  idToString,
+  idsToStrings,
+} from '../../lib/model.js';
 import { toPermissions } from '../../shared/permissions.js';
 
 import type { UserPayload } from '@shared/types.js';
@@ -53,26 +58,24 @@ export interface UserMethods {
 export type UserDocument = HydratedDocument<UserDoc, UserMethods>;
 export type UserModel = Model<UserDoc, Record<string, never>, UserMethods>;
 
-const userSchema = new Schema<UserDoc, UserModel, UserMethods>(
-  {
-    ...auditableFields,
-    name: { type: String, required: true, trim: true },
-    email: { type: String, required: true, trim: true, lowercase: true },
-    phone: { type: String, trim: true, default: null },
-    // `select: false` so a stray `User.find()` in some future list endpoint cannot serialise
-    // the hash into a response. Every read that needs it asks for it explicitly.
-    passwordHash: { type: String, required: true, select: false },
-    roleIds: { type: [{ type: Schema.Types.ObjectId, ref: 'Role' }], default: [] },
-    permissionGrants: { type: [String], default: [] },
-    permissionRevokes: { type: [String], default: [] },
-    locationIds: { type: [{ type: Schema.Types.ObjectId, ref: 'Location' }], default: [] },
-    defaultLocationId: { type: Schema.Types.ObjectId, ref: 'Location', default: null },
-    isActive: { type: Boolean, default: true, index: true },
-    mustChangePassword: { type: Boolean, default: false },
-    lastLoginAt: { type: Date, default: null },
-    tokenVersion: { type: Number, default: 0 },
-  },
-);
+const userSchema = new Schema<UserDoc, UserModel, UserMethods>({
+  ...auditableFields,
+  name: { type: String, required: true, trim: true },
+  email: { type: String, required: true, trim: true, lowercase: true },
+  phone: { type: String, trim: true, default: null },
+  // `select: false` so a stray `User.find()` in some future list endpoint cannot serialise
+  // the hash into a response. Every read that needs it asks for it explicitly.
+  passwordHash: { type: String, required: true, select: false },
+  roleIds: { type: [{ type: Schema.Types.ObjectId, ref: 'Role' }], default: [] },
+  permissionGrants: { type: [String], default: [] },
+  permissionRevokes: { type: [String], default: [] },
+  locationIds: { type: [{ type: Schema.Types.ObjectId, ref: 'Location' }], default: [] },
+  defaultLocationId: { type: Schema.Types.ObjectId, ref: 'Location', default: null },
+  isActive: { type: Boolean, default: true, index: true },
+  mustChangePassword: { type: Boolean, default: false },
+  lastLoginAt: { type: Date, default: null },
+  tokenVersion: { type: Number, default: 0 },
+});
 
 userSchema.plugin(baseSchemaPlugin);
 
@@ -120,7 +123,11 @@ export const User: UserModel = model<UserDoc, UserModel>('User', userSchema);
  * so the list screen can show what a user can actually do without the client loading every
  * role and re-deriving the union itself.
  */
-export function toUserPayload(doc: UserDoc, effective: Permission[], roleCodes: string[] = []): UserPayload {
+export function toUserPayload(
+  doc: UserDoc,
+  effective: Permission[],
+  roleCodes: string[] = [],
+): UserPayload {
   return {
     id: String(doc._id),
     name: doc.name,

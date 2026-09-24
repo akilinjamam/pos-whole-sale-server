@@ -51,7 +51,10 @@ export const createUserSchema = z
       !u.defaultLocationId ||
       u.locationIds.length === 0 ||
       u.locationIds.includes(u.defaultLocationId),
-    { path: ['defaultLocationId'], message: 'Default location must be one of the assigned locations' },
+    {
+      path: ['defaultLocationId'],
+      message: 'Default location must be one of the assigned locations',
+    },
   );
 
 export type CreateUserInput = z.infer<typeof createUserSchema>;

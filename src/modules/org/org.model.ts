@@ -64,25 +64,23 @@ const settingsSchema = new Schema<OrgSettingsDoc>(
   { _id: false },
 );
 
-const orgSchema = new Schema<OrgDoc>(
-  {
-    name: { type: String, required: true, trim: true },
-    legalName: { type: String, trim: true, default: null },
-    bin: { type: String, trim: true, default: null },
-    vatRegNo: { type: String, trim: true, default: null },
-    tin: { type: String, trim: true, default: null },
-    phone: { type: String, trim: true, default: null },
-    email: { type: String, trim: true, lowercase: true, default: null },
-    address: { type: String, trim: true, default: null },
-    logoUrl: { type: String, trim: true, default: null },
-    currency: { type: String, default: 'BDT', uppercase: true, minlength: 3, maxlength: 3 },
-    timeZone: { type: String, default: 'Asia/Dhaka' },
-    fiscalYearStartMonth: { type: Number, default: 7, min: 1, max: 12 },
-    settings: { type: settingsSchema, default: () => ({}) },
-    createdBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
-    updatedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
-  },
-);
+const orgSchema = new Schema<OrgDoc>({
+  name: { type: String, required: true, trim: true },
+  legalName: { type: String, trim: true, default: null },
+  bin: { type: String, trim: true, default: null },
+  vatRegNo: { type: String, trim: true, default: null },
+  tin: { type: String, trim: true, default: null },
+  phone: { type: String, trim: true, default: null },
+  email: { type: String, trim: true, lowercase: true, default: null },
+  address: { type: String, trim: true, default: null },
+  logoUrl: { type: String, trim: true, default: null },
+  currency: { type: String, default: 'BDT', uppercase: true, minlength: 3, maxlength: 3 },
+  timeZone: { type: String, default: 'Asia/Dhaka' },
+  fiscalYearStartMonth: { type: Number, default: 7, min: 1, max: 12 },
+  settings: { type: settingsSchema, default: () => ({}) },
+  createdBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+  updatedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+});
 
 orgSchema.plugin(baseSchemaPlugin);
 

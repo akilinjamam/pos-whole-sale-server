@@ -25,7 +25,10 @@ export type CreateLocationInput = z.infer<typeof createLocationSchema>;
 
 // `code` is absent: it is the natural key that ledger rows and balances were written against,
 // and renaming it would orphan them. A mistyped code is fixed by deactivating and recreating.
-export const updateLocationSchema = createLocationSchema.omit({ code: true }).partial().strict();
+export const updateLocationSchema = createLocationSchema
+  .omit({ code: true })
+  .partial()
+  .strict();
 
 export type UpdateLocationInput = z.infer<typeof updateLocationSchema>;
 

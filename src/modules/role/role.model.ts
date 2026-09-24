@@ -35,16 +35,14 @@ export interface RoleDoc {
   updatedAt: Date;
 }
 
-const roleSchema = new Schema<RoleDoc>(
-  {
-    ...auditableFields,
-    code: { type: String, required: true, trim: true, uppercase: true },
-    name: { type: String, required: true, trim: true },
-    description: { type: String, trim: true, default: null },
-    permissions: { type: [String], default: [] },
-    isSystem: { type: Boolean, default: false },
-  },
-);
+const roleSchema = new Schema<RoleDoc>({
+  ...auditableFields,
+  code: { type: String, required: true, trim: true, uppercase: true },
+  name: { type: String, required: true, trim: true },
+  description: { type: String, trim: true, default: null },
+  permissions: { type: [String], default: [] },
+  isSystem: { type: Boolean, default: false },
+});
 
 roleSchema.plugin(baseSchemaPlugin);
 
