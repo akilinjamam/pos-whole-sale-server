@@ -25,7 +25,7 @@ import type { FilterQuery, Model, PipelineStage } from 'mongoose';
  * and someone typing `.*` runs the most expensive query the collection can produce. The input
  * is a search box, so both arrive eventually.
  */
-function escapeRegex(value: string): string {
+export function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 

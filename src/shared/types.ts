@@ -11,6 +11,7 @@ import type {
   ErrorCode,
   LocationType,
   PackCode,
+  PartyRole,
   ProductType,
   TrackingMode,
   VariantAxis,
@@ -345,4 +346,106 @@ export interface UserPayload {
   lastLoginAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+// ─── Parties ────────────────────────────────────────────────────────────────────────────
+
+export interface PartyAddressPayload {
+  id: string;
+  label: string;
+  line1: string;
+  line2: string | null;
+  city: string | null;
+  district: string | null;
+  contactName: string | null;
+  phone: string | null;
+  isDefaultBilling: boolean;
+  isDefaultShipping: boolean;
+}
+
+export interface DealerTermsPayload {
+  priceTierId: string | null;
+  creditLimitMinor: number;
+  paymentTermsDays: number;
+  creditHold: boolean;
+  creditHoldReason: string | null;
+  /** When the hold was last switched on, set by the server — the credit-hold review sorts by it. */
+  creditHoldSince: string | null;
+  discountPct: number;
+  salespersonUserId: string | null;
+  /** Denormalised for the list, so it need not load every user to render a row. */
+  salespersonName?: string | null;
+  territory: string | null;
+  /** `YYYY-MM-DD`. */
+  since: string | null;
+}
+
+export interface SupplierBankAccountPayload {
+  bankName: string;
+  branch: string | null;
+  accountName: string;
+  accountNo: string;
+  routingNo: string | null;
+}
+
+export interface SupplierTermsPayload {
+  paymentTermsDays: number;
+  leadTimeDays: number;
+  bankAccount: SupplierBankAccountPayload | null;
+}
+
+/**
+ * A dealer, customer or supplier — or several at once. See `@shared/party` for why it is one
+ * entity.
+ *
+ * The role sections follow the same rule as cost fields on a product: **absent** (not null) when
+ * the caller may not read that role, `null` when the party simply does not hold it. A user who
+ * reads suppliers learns that a supplier is also a dealer — `roles` says so — but not that
+ * dealer's credit limit.
+ */
+export interface PartyPayload {
+  id: string;
+  code: string;
+  name: string;
+  displayName: string | null;
+  roles: PartyRole[];
+  phone: string | null;
+  email: string | null;
+  addresses: PartyAddressPayload[];
+  tin: string | null;
+  bin: string | null;
+  tradeLicenseNo: string | null;
+
+  /** Signed: positive means they owe us. Set once by the opening-balance import (Day 27). */
+  openingBalanceMinor: number;
+  openingBalanceAt: string | null;
+  /**
+   * Signed, positive means they owe us. A **cache** of the ledger sum — one figure across every
+   * role the party holds, because it is one ledger. `ledger:reconcile` checks it.
+   */
+  currentBalanceMinor: number;
+
+  isActive: boolean;
+  notes: string | null;
+  tags: string[];
+  imageUrl: string | null;
+
+  dealer?: DealerTermsPayload | null;
+  supplier?: SupplierTermsPayload | null;
+
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * An existing party that does **not** yet hold a role — what the "already on file?" search
+ * returns before creating a duplicate. Deliberately thin: it is shown to anyone who may create
+ * that role, including users who cannot read the party's other roles.
+ */
+export interface PartyCandidate {
+  id: string;
+  code: string;
+  name: string;
+  phone: string | null;
+  roles: PartyRole[];
 }

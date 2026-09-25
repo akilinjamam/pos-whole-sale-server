@@ -7,6 +7,7 @@ import categoryRouter from '../modules/category/category.route.js';
 import healthRouter from '../modules/health/health.route.js';
 import locationRouter from '../modules/location/location.route.js';
 import orgRouter from '../modules/org/org.route.js';
+import { customerRouter, dealerRouter, supplierRouter } from '../modules/party/party.route.js';
 import productRouter from '../modules/product/product.route.js';
 import roleRouter from '../modules/role/role.route.js';
 import userRouter from '../modules/user/user.route.js';
@@ -47,8 +48,14 @@ export const allRoutes: RouteEntry[] = [
   { path: 'variants', route: variantRouter },
   { path: 'barcodes', route: barcodeRouter },
 
-  // Day 9 onwards:
-  // { path: 'parties', route: partyRouter },
+  // Parties (Day 9): one collection, mounted once per role so each is gated on its own noun —
+  // see party.route.ts for why there is no single `/parties` router.
+  { path: 'dealers', route: dealerRouter },
+  { path: 'customers', route: customerRouter },
+  { path: 'suppliers', route: supplierRouter },
+
+  // Day 11 onwards:
+  // { path: 'price-tiers', route: priceTierRouter },
   // …
 ];
 
