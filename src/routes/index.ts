@@ -1,6 +1,7 @@
 import type { Router } from 'express';
 
 import authRouter from '../modules/auth/auth.route.js';
+import barcodeRouter from '../modules/barcode/barcode.route.js';
 import brandRouter from '../modules/brand/brand.route.js';
 import categoryRouter from '../modules/category/category.route.js';
 import healthRouter from '../modules/health/health.route.js';
@@ -44,6 +45,7 @@ export const allRoutes: RouteEntry[] = [
   { path: 'categories', route: categoryRouter },
   { path: 'products', route: productRouter },
   { path: 'variants', route: variantRouter },
+  { path: 'barcodes', route: barcodeRouter },
 
   // Day 9 onwards:
   // { path: 'parties', route: partyRouter },

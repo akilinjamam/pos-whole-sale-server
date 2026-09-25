@@ -3,7 +3,9 @@ import { ZodError } from 'zod';
 
 import { ApiError } from '../../lib/ApiError.js';
 import { paginate } from '../../lib/paginate.js';
+import { assertProductBarcodesFree } from '../../services/barcode.service.js';
 import { AXES_BY_TYPE, normaliseAttrs, productAttrsSchema } from '../../shared/catalog.js';
+import { validatePacks } from '../../shared/uom.js';
 import { Brand } from '../brand/brand.model.js';
 import { Category } from '../category/category.model.js';
 
@@ -143,35 +145,47 @@ async function assertReferencesExist(
   }
 }
 
-/** Turn the unique indexes into 422s on the offending field, not an opaque duplicate-key 409. */
-async function assertKeysFree(
+/** Turn the unique index into a 422 on the offending field, not an opaque duplicate-key 409. */
+async function assertSkuFree(
   orgId: Types.ObjectId,
   sku: string | undefined,
-  barcode: string | null | undefined,
   exceptId?: Types.ObjectId,
 ): Promise<void> {
-  const not = exceptId ? { _id: { $ne: exceptId } } : {};
+  if (!sku) return;
 
-  if (sku) {
-    const clash = await Product.findOne({ orgId, sku, ...not })
-      .select('name')
-      .lean();
-    if (clash) {
-      throw ApiError.validation('Validation failed', [
-        { path: 'sku', message: `Already used by "${clash.name}"` },
-      ]);
-    }
+  const clash = await Product.findOne({
+    orgId,
+    sku,
+    ...(exceptId ? { _id: { $ne: exceptId } } : {}),
+  })
+    .select('name')
+    .lean();
+
+  if (clash) {
+    throw ApiError.validation('Validation failed', [
+      { path: 'sku', message: `Already used by "${clash.name}"` },
+    ]);
   }
+}
 
-  if (barcode) {
-    const clash = await Product.findOne({ orgId, barcode, ...not })
-      .select('name')
-      .lean();
-    if (clash) {
-      throw ApiError.validation('Validation failed', [
-        { path: 'barcode', message: `Already used by "${clash.name}"` },
-      ]);
-    }
+/**
+ * Pack rules, from the shared validator.
+ *
+ * The same three checks the form applies, run here as well — a CSV import or a direct API call
+ * reaches this path without going anywhere near the form.
+ */
+function assertPacksValid(
+  baseUom: string,
+  packs: { code: string; name: string; factor: number }[] | undefined,
+): void {
+  if (!packs || packs.length === 0) return;
+
+  const problems = validatePacks(baseUom, packs);
+  if (problems.length > 0) {
+    throw ApiError.validation(
+      'Validation failed',
+      problems.map((p) => ({ path: `packs.${p.index}.${p.field}`, message: p.message })),
+    );
   }
 }
 
@@ -311,8 +325,10 @@ export async function createProduct(
   const attrs = parseAttrs(input.type, input.attrs);
 
   assertVariantAxes(input.type, input.hasVariants ?? false, input.variantAxes ?? []);
+  assertPacksValid(input.baseUom, input.packs);
   await assertReferencesExist(orgId, input.type, input.brandId, input.categoryId);
-  await assertKeysFree(orgId, input.sku, input.barcode);
+  await assertSkuFree(orgId, input.sku);
+  await assertProductBarcodesFree(orgId, { barcode: input.barcode, packs: input.packs });
 
   const trackingMode = resolveTrackingMode(input.type, attrs, input.trackingMode);
 
@@ -360,8 +376,18 @@ export async function updateProduct(
     input.hasVariants ?? current.hasVariants,
     input.variantAxes ?? current.variantAxes,
   );
+  assertPacksValid(input.baseUom ?? current.baseUom, input.packs);
   await assertReferencesExist(orgId, current.type, input.brandId, input.categoryId);
-  await assertKeysFree(orgId, input.sku, input.barcode, id);
+  await assertSkuFree(orgId, input.sku, id);
+  await assertProductBarcodesFree(
+    orgId,
+    {
+      barcode: input.barcode === undefined ? current.barcode : input.barcode,
+      // Packs are replaced wholesale when given; otherwise the stored ones still hold theirs.
+      packs: input.packs ?? current.packs,
+    },
+    id,
+  );
 
   const trackingMode = resolveTrackingMode(
     current.type,

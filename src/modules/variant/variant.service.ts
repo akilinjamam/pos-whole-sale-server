@@ -4,6 +4,7 @@ import { ApiError } from '../../lib/ApiError.js';
 import { paginate } from '../../lib/paginate.js';
 import { gridSteps } from '../../shared/catalog.js';
 import { axesPresent, buildVariantKey, describeAxes, isOnStep } from '../../shared/variant.js';
+import { assertBarcodeFree } from '../../services/barcode.service.js';
 import { Product } from '../product/product.model.js';
 
 import { Variant, toVariantPayload } from './variant.model.js';
@@ -226,14 +227,7 @@ export async function createVariant(
     ]);
   }
 
-  if (input.barcode) {
-    const clash = await Variant.findOne({ orgId, barcode: input.barcode }).select('sku').lean();
-    if (clash) {
-      throw ApiError.validation('Validation failed', [
-        { path: 'barcode', message: `Already used by ${clash.sku}` },
-      ]);
-    }
-  }
+  if (input.barcode) await assertBarcodeFree(orgId, input.barcode);
 
   const variant = await Variant.create({
     orgId,
@@ -258,16 +252,7 @@ export async function updateVariant(
   input: UpdateVariantInput,
   actorId: Types.ObjectId,
 ): Promise<VariantPayload> {
-  if (input.barcode) {
-    const clash = await Variant.findOne({ orgId, barcode: input.barcode, _id: { $ne: id } })
-      .select('sku')
-      .lean();
-    if (clash) {
-      throw ApiError.validation('Validation failed', [
-        { path: 'barcode', message: `Already used by ${clash.sku}` },
-      ]);
-    }
-  }
+  if (input.barcode) await assertBarcodeFree(orgId, input.barcode, { variantId: id });
 
   const variant = await Variant.findOneAndUpdate(
     { _id: id, orgId },

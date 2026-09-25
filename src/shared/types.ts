@@ -311,6 +311,22 @@ export interface VariantPayload {
   updatedAt: string;
 }
 
+/**
+ * What a scanned barcode resolves to.
+ *
+ * `qtyBase` is the quantity the scan *means*, which is the reason this is not just a product
+ * lookup: scanning a carton label adds 144 pieces to a cart, not one. The POS counter and the
+ * packing screen both read it rather than re-deriving a pack factor themselves.
+ */
+export interface BarcodeMatch {
+  product: ProductPayload;
+  variant: VariantPayload | null;
+  /** The unit the scan identifies — the base unit, or a pack code. */
+  uomCode: string;
+  qtyBase: number;
+  matchedOn: 'PRODUCT' | 'PACK' | 'VARIANT';
+}
+
 export interface UserPayload {
   id: string;
   name: string;
