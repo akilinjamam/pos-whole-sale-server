@@ -10,6 +10,7 @@ import orgRouter from '../modules/org/org.route.js';
 import { customerRouter, dealerRouter, supplierRouter } from '../modules/party/party.route.js';
 import priceListRouter from '../modules/priceList/priceList.route.js';
 import priceTierRouter from '../modules/priceTier/priceTier.route.js';
+import pricingRouter from '../modules/pricing/pricing.route.js';
 import productRouter from '../modules/product/product.route.js';
 import roleRouter from '../modules/role/role.route.js';
 import userRouter from '../modules/user/user.route.js';
@@ -60,8 +61,11 @@ export const allRoutes: RouteEntry[] = [
   { path: 'price-tiers', route: priceTierRouter },
   { path: 'price-lists', route: priceListRouter },
 
-  // Day 12 onwards:
-  // { path: 'pricing', route: pricingRouter },
+  // The pricing engine (Day 12): resolution only — the rules live in `domain/pricing.ts`.
+  { path: 'pricing', route: pricingRouter },
+
+  // Day 13 onwards:
+  // { path: 'stock', route: stockRouter },
   // …
 ];
 

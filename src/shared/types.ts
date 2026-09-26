@@ -535,3 +535,71 @@ export interface BulkAdjustResult {
     afterMinor: number;
   }[];
 }
+
+// ─── Price resolution (Day 12) ──────────────────────────────────────────────────────────
+
+/** Which rule produced a price, in the order they are tried. */
+export type PriceSource = 'DEALER' | 'TIER' | 'RETAIL' | 'PRODUCT_DEFAULT';
+
+export type PriceStepOutcome =
+  /** This step produced the price. */
+  | 'MATCHED'
+  /** The step applies, but nothing in it prices this product, variant and unit today. */
+  | 'NO_ENTRY'
+  /** Entries exist, but every one needs a larger quantity than was asked for. */
+  | 'BELOW_MIN_QTY'
+  /** The step does not apply at all — no dealer, dealer has no tier, tier is the retail one… */
+  | 'NOT_APPLICABLE'
+  /** An earlier step already matched. */
+  | 'NOT_REACHED';
+
+export interface PriceStepTrace {
+  step: PriceSource;
+  outcome: PriceStepOutcome;
+  /** One plain sentence for the price-check widget. */
+  note: string;
+}
+
+/**
+ * What a dealer pays for a quantity of one product, and why.
+ *
+ * All money is per the **requested unit** (`uomCode`), in minor units. `lineTotalMinor` is
+ * `unitPriceMinor × qty` exactly — the trade discount is applied per unit before multiplying,
+ * so the line never needs rounding.
+ */
+export interface PriceResolution {
+  productId: string;
+  variantId: string | null;
+  partyId: string | null;
+  uomCode: string;
+  qty: number;
+  /** `qty` in the product's base unit — what the stock engine will see. */
+  qtyBase: number;
+  /** The day the resolution is for, `YYYY-MM-DD`. */
+  date: string;
+
+  source: PriceSource;
+  /** The price before the dealer's trade discount. */
+  listUnitPriceMinor: number;
+  /** The dealer's trade discount, when it applied (never on a dealer-specific price). */
+  discountPct: number;
+  unitPriceMinor: number;
+  lineTotalMinor: number;
+
+  /** The entry that won, when `source` is not PRODUCT_DEFAULT. */
+  entryId: string | null;
+  /** Its qty break, in its own unit. */
+  entryMinQty: number | null;
+  entryUomCode: string | null;
+  /** True when a base-unit price was scaled to the requested pack (e.g. per-piece × 12). */
+  convertedFromBase: boolean;
+  /** Tier or dealer whose list won, for display. */
+  scopeName: string | null;
+  /** True when nothing priced the product and its default sell price is zero. */
+  unpriced: boolean;
+
+  /** The next qty break in the same list, if there is one — "order 5 dozen for ৳510 each". */
+  nextBreak: { minQty: number; uomCode: string; unitPriceMinor: number } | null;
+
+  trace: PriceStepTrace[];
+}
