@@ -116,7 +116,7 @@ export type PartyAddressInput = z.infer<typeof partyAddressSchema>;
  */
 export const dealerTermsSchema = z
   .object({
-    /** Validated against `PriceTier` once that module exists (Day 11). */
+    /** Must be an active `PriceTier` when set or changed — checked in the service. */
     priceTierId: objectId.nullable().optional(),
     creditLimitMinor: minorAmount.optional(),
     paymentTermsDays: days.optional(),

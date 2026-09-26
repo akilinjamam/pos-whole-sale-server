@@ -365,6 +365,8 @@ export interface PartyAddressPayload {
 
 export interface DealerTermsPayload {
   priceTierId: string | null;
+  /** Resolved server-side, like `salespersonName`. */
+  priceTierName?: string | null;
   creditLimitMinor: number;
   paymentTermsDays: number;
   creditHold: boolean;
@@ -448,4 +450,88 @@ export interface PartyCandidate {
   name: string;
   phone: string | null;
   roles: PartyRole[];
+}
+
+// ─── Pricing ────────────────────────────────────────────────────────────────────────────
+
+export interface PriceTierPayload {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  level: number;
+  isActive: boolean;
+  /** True for the tier `org.settings.defaultRetailTierId` points at — the counter's tier. */
+  isDefaultRetail: boolean;
+  /** Dealers on this tier, and entries priced in it — the delete guard reads both. */
+  dealerCount?: number;
+  entryCount?: number;
+}
+
+/**
+ * One price: for a tier or a single dealer, for a product (or one variant), in one unit, from a
+ * minimum quantity, within an optional window.
+ *
+ * The names are resolved server-side per page, so the grid renders without loading the catalogue.
+ */
+export interface PriceEntryPayload {
+  id: string;
+  tierId: string | null;
+  partyId: string | null;
+  productId: string;
+  variantId: string | null;
+  uomCode: string;
+  priceMinor: number;
+  minQty: number;
+  /** `YYYY-MM-DD`, inclusive; null is open-ended. */
+  validFrom: string | null;
+  validTo: string | null;
+  isActive: boolean;
+  note: string | null;
+
+  productName?: string;
+  sku?: string;
+  variantLabel?: string | null;
+  /** The product's base unit and packs, so the grid can offer the right units without a lookup. */
+  uomOptions?: { code: string; factor: number }[];
+  tierName?: string | null;
+  partyName?: string | null;
+
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type PriceImportRowStatus = 'CREATE' | 'UPDATE' | 'ERROR';
+
+export interface PriceImportRowResult {
+  line: number;
+  status: PriceImportRowStatus;
+  errors: string[];
+  /** Resolved for the preview, so the user sees *which* product a SKU matched. */
+  productName?: string;
+  variantLabel?: string | null;
+}
+
+export interface PriceImportResult {
+  dryRun: boolean;
+  rows: PriceImportRowResult[];
+  created: number;
+  updated: number;
+  failed: number;
+}
+
+export interface BulkAdjustResult {
+  dryRun: boolean;
+  /** Entries in scope. */
+  matched: number;
+  /** Entries whose price actually moved — rounding can leave a cheap item where it was. */
+  changed: number;
+  sample: {
+    id: string;
+    sku: string;
+    uomCode: string;
+    minQty: number;
+    beforeMinor: number;
+    afterMinor: number;
+  }[];
 }

@@ -8,6 +8,8 @@ import healthRouter from '../modules/health/health.route.js';
 import locationRouter from '../modules/location/location.route.js';
 import orgRouter from '../modules/org/org.route.js';
 import { customerRouter, dealerRouter, supplierRouter } from '../modules/party/party.route.js';
+import priceListRouter from '../modules/priceList/priceList.route.js';
+import priceTierRouter from '../modules/priceTier/priceTier.route.js';
 import productRouter from '../modules/product/product.route.js';
 import roleRouter from '../modules/role/role.route.js';
 import userRouter from '../modules/user/user.route.js';
@@ -54,8 +56,12 @@ export const allRoutes: RouteEntry[] = [
   { path: 'customers', route: customerRouter },
   { path: 'suppliers', route: supplierRouter },
 
-  // Day 11 onwards:
-  // { path: 'price-tiers', route: priceTierRouter },
+  // Pricing (Day 11). Tiers on `priceTier:manage`; entries on `price:*`.
+  { path: 'price-tiers', route: priceTierRouter },
+  { path: 'price-lists', route: priceListRouter },
+
+  // Day 12 onwards:
+  // { path: 'pricing', route: pricingRouter },
   // …
 ];
 

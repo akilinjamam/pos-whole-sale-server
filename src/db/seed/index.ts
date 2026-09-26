@@ -3,6 +3,7 @@ import { config } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
 import { Location } from '../../modules/location/location.model.js';
 import { Org } from '../../modules/org/org.model.js';
+import { PriceTier } from '../../modules/priceTier/priceTier.model.js';
 import { Role } from '../../modules/role/role.model.js';
 import { User } from '../../modules/user/user.model.js';
 
@@ -201,12 +202,53 @@ async function seedDemoUsers(
   }
 }
 
+/**
+ * The four tiers of §6.6, and RETAIL as the counter's default.
+ *
+ * `$setOnInsert` only: a tier the client renamed or reordered must survive the next seed run,
+ * exactly as a location does. The default-retail setting is written only while it is still
+ * unset, so a client who pointed the counter at another tier keeps that choice.
+ */
+async function seedPriceTiers(orgId: Types.ObjectId): Promise<void> {
+  const seeds = [
+    {
+      code: 'RETAIL',
+      name: 'Retail (MRP)',
+      level: 0,
+      description: 'Counter and walk-in prices.',
+    },
+    { code: 'DEALER_A', name: 'Dealer A', level: 10, description: null },
+    { code: 'DEALER_B', name: 'Dealer B', level: 20, description: null },
+    { code: 'DISTRIBUTOR', name: 'Distributor', level: 30, description: null },
+  ];
+
+  let retailId: Types.ObjectId | null = null;
+  for (const seed of seeds) {
+    const tier = await PriceTier.findOneAndUpdate(
+      { orgId, code: seed.code },
+      { $setOnInsert: { ...seed, orgId, isActive: true } },
+      { new: true, upsert: true },
+    );
+    if (seed.code === 'RETAIL') retailId = tier._id;
+  }
+
+  if (retailId) {
+    await Org.updateOne(
+      { _id: orgId, 'settings.defaultRetailTierId': null },
+      { $set: { 'settings.defaultRetailTierId': retailId } },
+    );
+  }
+
+  logger.info({ codes: seeds.map((s) => s.code) }, 'Price tiers seeded');
+}
+
 async function main(): Promise<void> {
   await connectDatabase();
 
   const orgId = await seedOrg();
   const roleIds = await seedRoles(orgId);
   await seedLocations(orgId);
+  await seedPriceTiers(orgId);
 
   const ownerRoleId = roleIds.get('OWNER');
   if (!ownerRoleId)

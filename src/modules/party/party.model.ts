@@ -203,6 +203,7 @@ export interface PartyPayloadOptions {
   /** Whether the caller may read suppliers. False **omits** `supplier`. */
   includeSupplier: boolean;
   salespersonName?: string | null;
+  priceTierName?: string | null;
 }
 
 function toDateOnly(value: Date | null): string | null {
@@ -226,10 +227,12 @@ function toAddressPayload(a: PartyAddressDoc): PartyAddressPayload {
 
 function toDealerPayload(
   d: DealerTermsDoc,
-  salespersonName?: string | null,
+  names: { salespersonName?: string | null; priceTierName?: string | null },
 ): DealerTermsPayload {
+  const { salespersonName, priceTierName } = names;
   return {
     priceTierId: idToString(d.priceTierId),
+    ...(priceTierName === undefined ? {} : { priceTierName }),
     creditLimitMinor: d.creditLimitMinor,
     paymentTermsDays: d.paymentTermsDays,
     creditHold: d.creditHold,
@@ -265,7 +268,7 @@ function toSupplierPayload(s: SupplierTermsDoc): SupplierTermsPayload {
  * a stale subdocument survived on it — `roles` is the authority.
  */
 export function toPartyPayload(doc: PartyDoc, options: PartyPayloadOptions): PartyPayload {
-  const { includeDealer, includeSupplier, salespersonName } = options;
+  const { includeDealer, includeSupplier, salespersonName, priceTierName } = options;
   const isDealer = doc.roles.includes('DEALER');
   const isSupplier = doc.roles.includes('SUPPLIER');
 
@@ -290,7 +293,12 @@ export function toPartyPayload(doc: PartyDoc, options: PartyPayloadOptions): Par
     imageUrl: doc.imageUrl ?? null,
 
     ...(includeDealer
-      ? { dealer: isDealer && doc.dealer ? toDealerPayload(doc.dealer, salespersonName) : null }
+      ? {
+          dealer:
+            isDealer && doc.dealer
+              ? toDealerPayload(doc.dealer, { salespersonName, priceTierName })
+              : null,
+        }
       : {}),
     ...(includeSupplier
       ? { supplier: isSupplier && doc.supplier ? toSupplierPayload(doc.supplier) : null }

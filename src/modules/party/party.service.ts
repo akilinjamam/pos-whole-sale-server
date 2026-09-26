@@ -5,6 +5,7 @@ import { counterKey, nextSequence } from '../../lib/numbering.js';
 import { escapeRegex, paginate } from '../../lib/paginate.js';
 import { formatPartyCode, PARTY_ROLE_LABELS } from '../../shared/party.js';
 import { Org } from '../org/org.model.js';
+import { PriceTier } from '../priceTier/priceTier.model.js';
 import { User } from '../user/user.model.js';
 
 import { Party, toPartyCandidate, toPartyPayload } from './party.model.js';
@@ -67,7 +68,8 @@ function label(role: PartyRole): string {
 // ─── Reads ──────────────────────────────────────────────────────────────────────────────
 
 /**
- * Serialise a page of parties, resolving salesperson names in one query rather than one per row.
+ * Serialise a page of parties, resolving salesperson and tier names in one query each rather
+ * than one per row.
  *
  * A role section is included only if the caller may read that role — see `PartyPayload`.
  */
@@ -92,12 +94,30 @@ async function serialize(actor: PartyActor, docs: PartyDoc[]): Promise<PartyPayl
       : [];
   const nameOf = new Map(users.map((u) => [String(u._id), u.name]));
 
+  const tierIds = includeDealer
+    ? [
+        ...new Set(
+          docs.flatMap((d) => (d.dealer?.priceTierId ? [String(d.dealer.priceTierId)] : [])),
+        ),
+      ]
+    : [];
+  const tiers =
+    tierIds.length > 0
+      ? await PriceTier.find({ orgId: actor.orgId, _id: { $in: tierIds } })
+          .select('name')
+          .lean()
+      : [];
+  const tierNameOf = new Map(tiers.map((t) => [String(t._id), t.name]));
+
   return docs.map((doc) =>
     toPartyPayload(doc, {
       includeDealer,
       includeSupplier,
       salespersonName: doc.dealer?.salespersonUserId
         ? (nameOf.get(String(doc.dealer.salespersonUserId)) ?? null)
+        : null,
+      priceTierName: doc.dealer?.priceTierId
+        ? (tierNameOf.get(String(doc.dealer.priceTierId)) ?? null)
         : null,
     }),
   );
@@ -235,6 +255,19 @@ async function assertSalesperson(orgId: Types.ObjectId, userId: string): Promise
   }
 }
 
+/**
+ * A dealer can be moved onto an active tier only. An unchanged tier that has since been
+ * deactivated is left alone (see the caller): refusing it would block every unrelated edit to
+ * the dealer until someone re-tiers them.
+ */
+async function assertPriceTier(orgId: Types.ObjectId, tierId: string): Promise<void> {
+  if (!(await PriceTier.exists({ _id: tierId, orgId, isActive: true }))) {
+    throw ApiError.validation('Validation failed', [
+      { path: 'dealer.priceTierId', message: 'No active price tier with this id' },
+    ]);
+  }
+}
+
 async function orgDefaultTermsDays(orgId: Types.ObjectId): Promise<number> {
   const org = await Org.findById(orgId).select('settings.defaultPaymentTermsDays').lean();
   return org?.settings?.defaultPaymentTermsDays ?? 0;
@@ -279,6 +312,9 @@ async function mergeDealerTerms(
   if (!input) return current;
 
   if (input.salespersonUserId) await assertSalesperson(orgId, input.salespersonUserId);
+  if (input.priceTierId && String(current.priceTierId) !== input.priceTierId) {
+    await assertPriceTier(orgId, input.priceTierId);
+  }
 
   const next: DealerTermsDoc = { ...current };
   if (input.priceTierId !== undefined) {
