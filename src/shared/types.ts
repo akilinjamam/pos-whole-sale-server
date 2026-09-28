@@ -13,6 +13,7 @@ import type {
   PackCode,
   PartyRole,
   ProductType,
+  StockMovementType,
   TrackingMode,
   VariantAxis,
 } from './enums.js';
@@ -602,4 +603,78 @@ export interface PriceResolution {
   nextBreak: { minQty: number; uomCode: string; unitPriceMinor: number } | null;
 
   trace: PriceStepTrace[];
+}
+
+// ─── Stock (Day 13) ─────────────────────────────────────────────────────────────────────
+
+/**
+ * One on-hand figure. Cost is **absent** (not null) without `stock:viewCost`, as on products.
+ * `qtyAvailable` is derived — on hand less reserved — and never stored.
+ */
+export interface StockBalancePayload {
+  id: string;
+  locationId: string;
+  productId: string;
+  variantId: string | null;
+  qtyOnHand: number;
+  qtyReserved: number;
+  qtyAvailable: number;
+  qtyIncoming: number;
+  avgCostMinor?: number;
+  lastMovementAt: string | null;
+
+  productName?: string;
+  sku?: string;
+  baseUom?: string;
+  variantLabel?: string | null;
+  locationCode?: string;
+  locationName?: string;
+}
+
+/** One immutable ledger row. `qtyBase` is signed: + in, − out. */
+export interface StockLedgerPayload {
+  id: string;
+  postedAt: string;
+  periodKey: number;
+  locationId: string;
+  productId: string;
+  variantId: string | null;
+  lotId: string | null;
+  serialNo: string | null;
+  qtyBase: number;
+  movementType: StockMovementType;
+  refType: string;
+  refId: string | null;
+  refDocNo: string | null;
+  unitCostMinor?: number | null;
+  valueMinor?: number | null;
+  balanceAfterBase: number;
+  reversalOfId: string | null;
+  narration: string | null;
+  createdBy: string | null;
+
+  productName?: string;
+  sku?: string;
+  variantLabel?: string | null;
+  locationCode?: string;
+}
+
+export interface OpeningImportRowResult {
+  line: number;
+  status: 'POST' | 'ERROR';
+  errors: string[];
+  productName?: string;
+  variantLabel?: string | null;
+  /** The row's quantity converted to base units — "5 DOZ" shows as 60 before anything is posted. */
+  qtyBase?: number;
+}
+
+export interface OpeningImportResult {
+  dryRun: boolean;
+  rows: OpeningImportRowResult[];
+  posted: number;
+  failed: number;
+  /** Shared by every movement of a committed import, so it can be found (and reversed) as one. */
+  refId: string | null;
+  refDocNo: string | null;
 }

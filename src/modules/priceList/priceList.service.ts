@@ -1,6 +1,7 @@
-import mongoose, { Types } from 'mongoose';
+import { Types } from 'mongoose';
 
 import { ApiError } from '../../lib/ApiError.js';
+import { withTransaction } from '../../lib/withTransaction.js';
 import { escapeRegex, paginate } from '../../lib/paginate.js';
 import { adjustPrice, windowsOverlap } from '../../shared/pricing.js';
 import { packFactor, uomOptions } from '../../shared/uom.js';
@@ -607,14 +608,9 @@ export async function importPriceEntries(
 
     // All valid rows or none: a failure half-way (a concurrent insert hitting the unique index,
     // say) must not leave the list half-imported with a report claiming otherwise.
-    const session = await mongoose.startSession();
-    try {
-      await session.withTransaction(async () => {
-        await PriceListEntry.bulkWrite(ops, { session, ordered: true });
-      });
-    } finally {
-      await session.endSession();
-    }
+    await withTransaction(async (session) => {
+      await PriceListEntry.bulkWrite(ops, { session, ordered: true });
+    });
   }
 
   return { dryRun: input.dryRun, rows: results, created, updated, failed };
@@ -676,24 +672,19 @@ export async function bulkAdjustPrices(
   const skuOf = new Map(sampleProducts.map((p) => [String(p._id), p.sku]));
 
   if (!input.dryRun && changes.length > 0) {
-    const session = await mongoose.startSession();
-    try {
-      await session.withTransaction(async () => {
-        await PriceListEntry.bulkWrite(
-          changes.map((c) => ({
-            updateOne: {
-              // Guarded on the price read above: an entry someone re-priced in between is left
-              // alone rather than having their edit multiplied.
-              filter: { _id: c.entry._id, orgId, priceMinor: c.entry.priceMinor },
-              update: { $set: { priceMinor: c.after, updatedBy: actorId } },
-            },
-          })),
-          { session },
-        );
-      });
-    } finally {
-      await session.endSession();
-    }
+    await withTransaction(async (session) => {
+      await PriceListEntry.bulkWrite(
+        changes.map((c) => ({
+          updateOne: {
+            // Guarded on the price read above: an entry someone re-priced in between is left
+            // alone rather than having their edit multiplied.
+            filter: { _id: c.entry._id, orgId, priceMinor: c.entry.priceMinor },
+            update: { $set: { priceMinor: c.after, updatedBy: actorId } },
+          },
+        })),
+        { session },
+      );
+    });
   }
 
   return {

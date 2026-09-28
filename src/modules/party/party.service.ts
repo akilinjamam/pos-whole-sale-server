@@ -1,6 +1,7 @@
-import mongoose, { Types } from 'mongoose';
+import { Types } from 'mongoose';
 
 import { ApiError } from '../../lib/ApiError.js';
+import { withTransaction } from '../../lib/withTransaction.js';
 import { counterKey, nextSequence } from '../../lib/numbering.js';
 import { escapeRegex, paginate } from '../../lib/paginate.js';
 import { formatPartyCode, PARTY_ROLE_LABELS } from '../../shared/party.js';
@@ -450,18 +451,13 @@ export async function createParty(
   };
 
   let createdId: Types.ObjectId | undefined;
-  const session = await mongoose.startSession();
-  try {
-    await session.withTransaction(async () => {
-      const code =
-        input.code ??
-        formatPartyCode(await nextSequence(counterKey(actor.orgId, 'DLR'), session));
-      const [created] = await Party.create([{ ...doc, code }], { session });
-      createdId = created!._id;
-    });
-  } finally {
-    await session.endSession();
-  }
+  await withTransaction(async (session) => {
+    const code =
+      input.code ??
+      formatPartyCode(await nextSequence(counterKey(actor.orgId, 'DLR'), session));
+    const [created] = await Party.create([{ ...doc, code }], { session });
+    createdId = created!._id;
+  });
 
   return getParty(actor, role, createdId!);
 }

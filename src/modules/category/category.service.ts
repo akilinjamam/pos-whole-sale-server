@@ -1,6 +1,7 @@
-import mongoose, { Types } from 'mongoose';
+import { Types } from 'mongoose';
 
 import { ApiError } from '../../lib/ApiError.js';
+import { withTransaction } from '../../lib/withTransaction.js';
 import { paginate } from '../../lib/paginate.js';
 import { Product } from '../product/product.model.js';
 
@@ -184,8 +185,8 @@ export async function createCategory(
  * that must all land or none: a descendant left with a stale path silently disappears from its
  * new branch's subtree query, and nothing errors — so it runs in a transaction.
  *
- * Day 13 introduces `lib/withTransaction.ts`; this is the first place that needed one, and it
- * will move to the helper then.
+ * It was the first code in the system to need a transaction; it now goes through
+ * `lib/withTransaction.ts` like every other multi-document write.
  */
 export async function updateCategory(
   orgId: Types.ObjectId,
@@ -230,32 +231,27 @@ export async function updateCategory(
 
   const descendants = await Category.find({ orgId, path: id }).select('path').lean();
 
-  const session = await mongoose.startSession();
-  try {
-    await session.withTransaction(async () => {
-      await Category.updateOne(
-        { _id: id, orgId },
-        { $set: { ...input, parentId: newParentId, path: newPath, updatedBy: actorId } },
+  await withTransaction(async (session) => {
+    await Category.updateOne(
+      { _id: id, orgId },
+      { $set: { ...input, parentId: newParentId, path: newPath, updatedBy: actorId } },
+      { session },
+    );
+
+    if (descendants.length > 0) {
+      await Category.bulkWrite(
+        descendants.map((d) => ({
+          updateOne: {
+            filter: { _id: d._id },
+            // Everything from this node down keeps its shape; only the prefix above it moves.
+            // `slice(current.path.length)` is that suffix, starting with this node's own id.
+            update: { $set: { path: [...newPath, ...d.path.slice(current.path.length)] } },
+          },
+        })),
         { session },
       );
-
-      if (descendants.length > 0) {
-        await Category.bulkWrite(
-          descendants.map((d) => ({
-            updateOne: {
-              filter: { _id: d._id },
-              // Everything from this node down keeps its shape; only the prefix above it moves.
-              // `slice(current.path.length)` is that suffix, starting with this node's own id.
-              update: { $set: { path: [...newPath, ...d.path.slice(current.path.length)] } },
-            },
-          })),
-          { session },
-        );
-      }
-    });
-  } finally {
-    await session.endSession();
-  }
+    }
+  });
 
   return getCategory(orgId, id);
 }

@@ -13,6 +13,7 @@ import priceTierRouter from '../modules/priceTier/priceTier.route.js';
 import pricingRouter from '../modules/pricing/pricing.route.js';
 import productRouter from '../modules/product/product.route.js';
 import roleRouter from '../modules/role/role.route.js';
+import stockRouter from '../modules/stock/stock.route.js';
 import userRouter from '../modules/user/user.route.js';
 import variantRouter from '../modules/variant/variant.route.js';
 
@@ -64,8 +65,12 @@ export const allRoutes: RouteEntry[] = [
   // The pricing engine (Day 12): resolution only — the rules live in `domain/pricing.ts`.
   { path: 'pricing', route: pricingRouter },
 
-  // Day 13 onwards:
-  // { path: 'stock', route: stockRouter },
+  // Inventory (Day 13). Reads, and the opening import — stock is only ever written by posting
+  // a document through `services/stock.service.ts`.
+  { path: 'stock', route: stockRouter },
+
+  // Day 14 onwards:
+  // { path: 'stock-adjustments', route: stockAdjustmentRouter },
   // …
 ];
 
