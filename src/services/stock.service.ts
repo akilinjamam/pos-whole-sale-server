@@ -58,6 +58,25 @@ export interface PostMovementsArgs {
   movements: readonly MovementInput[];
   postedAt: Date;
   actorId: Types.ObjectId;
+  /**
+   * Only for a stock count posting its own variance: every other caller is refused on a row the
+   * count has frozen. See `StockBalance.frozenByCountId`.
+   */
+  bypassFreeze?: boolean;
+}
+
+/** The refusal a frozen row produces — its own code, so the UI can say "a count is in progress". */
+function frozenError(m: MovementInput, countId: Types.ObjectId): ApiError {
+  return ApiError.conflict(
+    'STOCK_FROZEN',
+    'A stock count is in progress for this item here. Post or cancel the count first.',
+    {
+      locationId: String(m.locationId),
+      productId: String(m.productId),
+      variantId: m.variantId ? String(m.variantId) : null,
+      countId: String(countId),
+    },
+  );
 }
 
 /**
@@ -167,7 +186,7 @@ function blendedCost(onHand: number, avg: number, qtyIn: number, cost: number): 
 
 export async function postMovements(
   session: ClientSession,
-  { orgId, movements, postedAt, actorId }: PostMovementsArgs,
+  { orgId, movements, postedAt, actorId, bypassFreeze = false }: PostMovementsArgs,
 ): Promise<StockLedgerDoc[]> {
   if (movements.length === 0) return [];
   movements.forEach(assertShape);
@@ -216,6 +235,8 @@ export async function postMovements(
 
       if (!updated) {
         const current = await StockBalance.findOne(key).session(session).lean();
+        if (current?.frozenByCountId && !bypassFreeze)
+          throw frozenError(m, current.frozenByCountId);
         throw ApiError.conflict('INSUFFICIENT_STOCK', 'Not enough stock for this movement', {
           locationId: String(m.locationId),
           productId: String(m.productId),
@@ -224,6 +245,10 @@ export async function postMovements(
           available: current?.qtyOnHand ?? 0,
         });
       }
+      // Frozen but with enough stock: the update went through inside this transaction, and
+      // throwing now rolls it back with everything else.
+      if (updated.frozenByCountId && !bypassFreeze)
+        throw frozenError(m, updated.frozenByCountId);
       balanceAfter = updated.qtyOnHand;
     } else {
       const costed = m.unitCostMinor != null && COSTED_INBOUND.includes(m.movementType);
@@ -254,6 +279,8 @@ export async function postMovements(
         },
         { new: true, session, upsert: true, setDefaultsOnInsert: true },
       ).lean();
+      if (updated!.frozenByCountId && !bypassFreeze)
+        throw frozenError(m, updated!.frozenByCountId);
       balanceAfter = updated!.qtyOnHand;
     }
 

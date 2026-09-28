@@ -38,3 +38,18 @@ export function toObjectId(value: string, field = 'id'): Types.ObjectId {
   }
   return new Types.ObjectId(value);
 }
+
+/**
+ * Who is acting, for services that need more than the org: the tenant, the user id for
+ * `createdBy`, and the full verified user — for location scoping and field-level permission
+ * checks made inside the service.
+ */
+export interface RequestActor {
+  orgId: Types.ObjectId;
+  actorId: Types.ObjectId;
+  user: AuthUser;
+}
+
+export function requestActorOf(req: Request): RequestActor {
+  return { orgId: orgIdOf(req), actorId: actorIdOf(req), user: requireAuth(req) };
+}

@@ -14,6 +14,10 @@ import type {
   PartyRole,
   ProductType,
   StockMovementType,
+  AdjustmentReason,
+  CountStatus,
+  DocumentStatus,
+  TransferStatus,
   TrackingMode,
   VariantAxis,
 } from './enums.js';
@@ -622,6 +626,8 @@ export interface StockBalancePayload {
   qtyIncoming: number;
   avgCostMinor?: number;
   lastMovementAt: string | null;
+  /** The open stock count holding this item still, if any. */
+  frozenByCountId: string | null;
 
   productName?: string;
   sku?: string;
@@ -677,4 +683,93 @@ export interface OpeningImportResult {
   /** Shared by every movement of a committed import, so it can be found (and reversed) as one. */
   refId: string | null;
   refDocNo: string | null;
+}
+
+// ─── Stock documents (Day 14) ───────────────────────────────────────────────────────────
+
+/** A document line: what was entered, and what it means in base units. */
+export interface StockDocLinePayload {
+  productId: string;
+  variantId: string | null;
+  uomCode: string;
+  /** As entered, in `uomCode`. Signed on adjustments. */
+  qty: number;
+  qtyBase: number;
+  productName?: string;
+  sku?: string;
+  variantLabel?: string | null;
+}
+
+interface PostedBy {
+  /** Null until posted — drafts have no number, so abandoned drafts leave no gap. */
+  docNo: string | null;
+  postedAt: string | null;
+  postedBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StockAdjustmentPayload extends PostedBy {
+  id: string;
+  status: DocumentStatus;
+  locationId: string;
+  locationName?: string;
+  reason: AdjustmentReason;
+  note: string | null;
+  lines: StockDocLinePayload[];
+  /** Net units in (+) or out (−), across all lines, in base units. */
+  netQtyBase: number;
+  cancelledAt: string | null;
+  cancelReason: string | null;
+}
+
+export interface StockTransferPayload extends PostedBy {
+  id: string;
+  status: TransferStatus;
+  fromLocationId: string;
+  toLocationId: string;
+  transitLocationId: string | null;
+  fromLocationName?: string;
+  toLocationName?: string;
+  transitLocationName?: string | null;
+  note: string | null;
+  lines: StockDocLinePayload[];
+  /** When the goods left the source — `postedAt`, named for what it means here. */
+  dispatchedAt: string | null;
+  receivedAt: string | null;
+  receivedBy: string | null;
+}
+
+export interface StockCountLinePayload {
+  productId: string;
+  variantId: string | null;
+  /** On hand when the count froze the item. */
+  expectedBase: number;
+  /** What the counters found; null until counted. */
+  countedBase: number | null;
+  /** counted − expected; null until counted. Only non-zero variances post a movement. */
+  varianceBase: number | null;
+  productName?: string;
+  sku?: string;
+  baseUom?: string;
+  variantLabel?: string | null;
+}
+
+export interface StockCountPayload extends PostedBy {
+  id: string;
+  status: CountStatus;
+  locationId: string;
+  locationName?: string;
+  scope: 'ALL' | 'PRODUCTS';
+  note: string | null;
+  frozenAt: string;
+  lines: StockCountLinePayload[];
+  summary: {
+    lines: number;
+    counted: number;
+    withVariance: number;
+    /** Sum of variances, base units: negative means stock is missing. */
+    netVarianceBase: number;
+  };
+  cancelledAt: string | null;
 }

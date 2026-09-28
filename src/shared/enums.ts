@@ -116,6 +116,31 @@ export const OUTBOUND_MOVEMENTS: readonly StockMovementType[] = [
   'DAMAGE',
 ];
 
+// ─── Stock documents (Day 14) ───────────────────────────────────────────────────────────
+
+/** Why stock was adjusted. Every adjustment carries one — an unexplained write-off is a loss. */
+export const ADJUSTMENT_REASONS = [
+  'DAMAGED',
+  'EXPIRED',
+  'LOST',
+  'FOUND',
+  'SAMPLE',
+  'CORRECTION',
+  'OTHER',
+] as const;
+export type AdjustmentReason = Member<typeof ADJUSTMENT_REASONS>;
+
+/**
+ * A direct transfer goes DRAFT → RECEIVED in one posting. Via a transit location it stops at
+ * IN_TRANSIT between the two legs — the goods are on the bus, belonging to neither shop.
+ */
+export const TRANSFER_STATUSES = ['DRAFT', 'IN_TRANSIT', 'RECEIVED', 'CANCELLED'] as const;
+export type TransferStatus = Member<typeof TRANSFER_STATUSES>;
+
+/** COUNTING is the freeze: movements for the counted items wait until POSTED or CANCELLED. */
+export const COUNT_STATUSES = ['COUNTING', 'POSTED', 'CANCELLED'] as const;
+export type CountStatus = Member<typeof COUNT_STATUSES>;
+
 // ─── Wholesale orders ───────────────────────────────────────────────────────────────────
 
 export const ORDER_STATUSES = [
@@ -236,6 +261,7 @@ export const DOC_SERIES = [
   'ADJ', // stock adjustment
   'TRF', // stock transfer
   'DLR', // party code
+  'CNT', // stock count
 ] as const;
 export type DocSeries = Member<typeof DOC_SERIES>;
 
@@ -255,6 +281,8 @@ export const ERROR_CODES = [
   'INSUFFICIENT_STOCK',
   'CREDIT_LIMIT_EXCEEDED',
   'ILLEGAL_TRANSITION',
+  // A stock count has frozen this item at this location; movements wait until it is posted.
+  'STOCK_FROZEN',
   'RATE_LIMITED',
   'INTERNAL_ERROR',
 ] as const;

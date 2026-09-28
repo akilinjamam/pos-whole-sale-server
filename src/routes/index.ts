@@ -14,6 +14,9 @@ import pricingRouter from '../modules/pricing/pricing.route.js';
 import productRouter from '../modules/product/product.route.js';
 import roleRouter from '../modules/role/role.route.js';
 import stockRouter from '../modules/stock/stock.route.js';
+import stockAdjustmentRouter from '../modules/stockAdjustment/stockAdjustment.route.js';
+import stockCountRouter from '../modules/stockCount/stockCount.route.js';
+import stockTransferRouter from '../modules/stockTransfer/stockTransfer.route.js';
 import userRouter from '../modules/user/user.route.js';
 import variantRouter from '../modules/variant/variant.route.js';
 
@@ -69,8 +72,13 @@ export const allRoutes: RouteEntry[] = [
   // a document through `services/stock.service.ts`.
   { path: 'stock', route: stockRouter },
 
-  // Day 14 onwards:
-  // { path: 'stock-adjustments', route: stockAdjustmentRouter },
+  // Stock documents (Day 14): draft → post; posting is the only way they move stock.
+  { path: 'stock-adjustments', route: stockAdjustmentRouter },
+  { path: 'stock-transfers', route: stockTransferRouter },
+  { path: 'stock-counts', route: stockCountRouter },
+
+  // Day 15 onwards:
+  // { path: 'lots', route: lotRouter },
   // …
 ];
 

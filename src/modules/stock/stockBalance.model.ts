@@ -31,6 +31,12 @@ export interface StockBalanceDoc {
   qtyIncoming: number;
   avgCostMinor: number;
   lastMovementAt: Date | null;
+  /**
+   * Set while a stock count (Day 14) is counting this item here. `stock.service` refuses any
+   * movement on a frozen row except the count's own variance posting, so the shelf the counters
+   * are looking at is the shelf the system thinks it is.
+   */
+  frozenByCountId: Types.ObjectId | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -46,6 +52,7 @@ const stockBalanceSchema = new Schema<StockBalanceDoc>(
     qtyIncoming: { type: Number, default: 0 },
     avgCostMinor: { type: Number, default: 0 },
     lastMovementAt: { type: Date, default: null },
+    frozenByCountId: { type: Schema.Types.ObjectId, ref: 'StockCount', default: null },
   },
   { collection: 'stock_balances', versionKey: false, timestamps: true },
 );
@@ -95,6 +102,7 @@ export function toStockBalancePayload(
     qtyIncoming: doc.qtyIncoming,
     ...(includeCost ? { avgCostMinor: doc.avgCostMinor } : {}),
     lastMovementAt: doc.lastMovementAt ? doc.lastMovementAt.toISOString() : null,
+    frozenByCountId: doc.frozenByCountId ? String(doc.frozenByCountId) : null,
     ...names,
   };
 }
