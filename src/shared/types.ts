@@ -14,6 +14,8 @@ import type {
   PartyRole,
   ProductType,
   StockMovementType,
+  SerialStatus,
+  WarrantyState,
   AdjustmentReason,
   CountStatus,
   DocumentStatus,
@@ -695,6 +697,10 @@ export interface StockDocLinePayload {
   /** As entered, in `uomCode`. Signed on adjustments. */
   qty: number;
   qtyBase: number;
+  lotNo: string | null;
+  /** `YYYY-MM-DD`. */
+  expiryDate: string | null;
+  serials: string[];
   productName?: string;
   sku?: string;
   variantLabel?: string | null;
@@ -772,4 +778,97 @@ export interface StockCountPayload extends PostedBy {
     netVarianceBase: number;
   };
   cancelledAt: string | null;
+}
+
+// ─── Lots, serials, warranty (Day 15) ───────────────────────────────────────────────────
+
+export interface WarrantyPayload {
+  state: WarrantyState;
+  months: number | null;
+  /** `YYYY-MM-DD`. */
+  startsOn: string | null;
+  /** Inclusive last covered day, `YYYY-MM-DD`. */
+  endsOn: string | null;
+  daysLeft: number | null;
+}
+
+export interface SerialUnitPayload {
+  id: string;
+  serialNo: string;
+  productId: string;
+  variantId: string | null;
+  status: SerialStatus;
+  locationId: string | null;
+  lotId: string | null;
+  receivedAt: string;
+  lastMovementAt: string;
+  soldAt: string | null;
+  soldPartyId: string | null;
+  soldInvoiceId: string | null;
+  /** Absent without `stock:viewCost`. */
+  unitCostMinor?: number | null;
+  warranty: WarrantyPayload;
+
+  productName?: string;
+  sku?: string;
+  variantLabel?: string | null;
+  locationCode?: string | null;
+  soldPartyName?: string | null;
+}
+
+/** One unit and every ledger row that ever moved it, oldest first. */
+export interface SerialHistoryPayload {
+  unit: SerialUnitPayload;
+  history: StockLedgerPayload[];
+}
+
+export interface LotPayload {
+  id: string;
+  lotNo: string;
+  productId: string;
+  variantId: string | null;
+  /** `YYYY-MM-DD`. */
+  mfgDate: string | null;
+  expiryDate: string | null;
+  /** Negative once expired; null with no expiry. */
+  daysToExpiry: number | null;
+  onHand: { locationId: string; locationCode: string; qtyOnHand: number }[];
+  totalOnHand: number;
+
+  productName?: string;
+  sku?: string;
+  baseUom?: string;
+  variantLabel?: string | null;
+}
+
+// ─── Reconcile (Day 16) ─────────────────────────────────────────────────────────────────
+
+export interface ReconcileDriftPayload {
+  key: string;
+  /** From the ledger (or, for serials, the register's in-stock count). */
+  expected: number;
+  /** From the cached balance. */
+  actual: number;
+  /** actual − expected. */
+  drift: number;
+  locationId: string;
+  locationCode: string;
+  productId?: string;
+  variantId?: string | null;
+  sku?: string;
+  lotId?: string;
+  lotNo?: string;
+}
+
+export interface ReconcileResult {
+  checkedAt: string;
+  tookMs: number;
+  /** Null when the whole org was checked. */
+  locationId: string | null;
+  counts: { balances: number; ledgerGroups: number; lots: number };
+  balanceDrift: ReconcileDriftPayload[];
+  lotDrift: ReconcileDriftPayload[];
+  serialDrift: ReconcileDriftPayload[];
+  /** True when every cache agrees with the ledger. */
+  clean: boolean;
 }

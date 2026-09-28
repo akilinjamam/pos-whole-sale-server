@@ -70,3 +70,16 @@ export function addDays(day: string, n: number): string {
   d.setUTCDate(d.getUTCDate() + n);
   return d.toISOString().slice(0, 10);
 }
+
+/**
+ * `YYYY-MM-DD` ↔ a Date at UTC midnight — for **calendar days** (price validity, expiry, warranty
+ * end), which have no time of day and no zone. Never local time: a browser in Dhaka turning
+ * midnight UTC into 06:00 is how "valid until 31 March" becomes "until 30 March".
+ */
+export function dayToDate(value: string | null | undefined): Date | null {
+  return value ? new Date(`${value}T00:00:00.000Z`) : null;
+}
+
+export function dateToDay(value: Date | null | undefined): string | null {
+  return value ? value.toISOString().slice(0, 10) : null;
+}

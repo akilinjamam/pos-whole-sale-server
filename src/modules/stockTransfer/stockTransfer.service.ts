@@ -10,6 +10,7 @@ import {
   assertStockLocation,
   lineNames,
   resolveStockLines,
+  trackingFor,
 } from '../../services/stockLines.js';
 import { Location } from '../location/location.model.js';
 
@@ -222,33 +223,43 @@ export async function deleteTransfer(actor: RequestActor, id: Types.ObjectId): P
   await StockTransfer.deleteOne({ _id: id, orgId: actor.orgId, status: 'DRAFT' });
 }
 
-/** One leg: every line out of `from` and into `to`, as an OUT row then an IN row per line. */
-function leg(
+/**
+ * One leg: every line out of `from` and into `to`, as an OUT then an IN per line. The same lot
+ * and the same serials travel on both halves — a transfer never creates a lot, it moves one.
+ */
+async function leg(
+  session: ClientSession,
+  actor: RequestActor,
   doc: StockTransferDoc,
   from: Types.ObjectId,
   to: Types.ObjectId,
   docNo: string,
   narration: string,
-): MovementInput[] {
-  return doc.lines.flatMap((l) => {
-    const common = {
-      productId: l.productId,
-      variantId: l.variantId,
-      refType: REF_TYPE,
-      refId: doc._id,
-      refDocNo: docNo,
-      narration,
-    };
-    return [
-      {
-        ...common,
-        locationId: from,
-        qtyBase: -l.qtyBase,
-        movementType: 'TRANSFER_OUT' as const,
-      },
-      { ...common, locationId: to, qtyBase: l.qtyBase, movementType: 'TRANSFER_IN' as const },
-    ];
-  });
+): Promise<MovementInput[]> {
+  const perLine = await Promise.all(
+    doc.lines.map(async (l) => {
+      const tracking = await trackingFor(session, actor.orgId, l, 'OUT', actor.actorId);
+      const common = {
+        productId: l.productId,
+        variantId: l.variantId,
+        refType: REF_TYPE,
+        refId: doc._id,
+        refDocNo: docNo,
+        narration,
+        ...tracking,
+      };
+      return [
+        {
+          ...common,
+          locationId: from,
+          qtyBase: -l.qtyBase,
+          movementType: 'TRANSFER_OUT' as const,
+        },
+        { ...common, locationId: to, qtyBase: l.qtyBase, movementType: 'TRANSFER_IN' as const },
+      ];
+    }),
+  );
+  return perLine.flat();
 }
 
 /**
@@ -291,7 +302,9 @@ export async function postTransfer(
       orgId: actor.orgId,
       postedAt,
       actorId: actor.actorId,
-      movements: leg(
+      movements: await leg(
+        session,
+        actor,
         claimed,
         claimed.fromLocationId,
         claimed.transitLocationId ?? claimed.toLocationId,
@@ -343,7 +356,9 @@ export async function receiveTransfer(
       orgId: actor.orgId,
       postedAt: receivedAt,
       actorId: actor.actorId,
-      movements: leg(
+      movements: await leg(
+        session,
+        actor,
         claimed,
         claimed.transitLocationId!,
         claimed.toLocationId,

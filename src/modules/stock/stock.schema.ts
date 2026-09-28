@@ -23,6 +23,9 @@ export const listBalancesQuerySchema = listQuerySchema.extend({
 export type ListBalancesQuery = z.infer<typeof listBalancesQuerySchema>;
 
 export const listLedgerQuerySchema = listQuerySchema.extend({
+  /** A document number — `ADJ-2627-00012` — to see exactly what that document moved. */
+  refDocNo: z.string().trim().toUpperCase().max(40).optional(),
+  serialNo: z.string().trim().toUpperCase().max(60).optional(),
   locationId: objectId.optional(),
   productId: objectId.optional(),
   variantId: objectId.optional(),
@@ -35,3 +38,7 @@ export const listLedgerQuerySchema = listQuerySchema.extend({
 });
 
 export type ListLedgerQuery = z.infer<typeof listLedgerQuerySchema>;
+
+export const reconcileBodySchema = z.object({ locationId: objectId.optional() }).strict();
+
+export type ReconcileBody = z.infer<typeof reconcileBodySchema>;

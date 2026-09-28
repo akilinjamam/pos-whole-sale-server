@@ -137,6 +137,11 @@ stockLedgerSchema.index({ orgId: 1, productId: 1, variantId: 1, locationId: 1, p
 // The ledger screen filtered by location and date, and reports by period.
 stockLedgerSchema.index({ orgId: 1, locationId: 1, postedAt: -1 });
 stockLedgerSchema.index({ orgId: 1, periodKey: 1, movementType: 1 });
+// A serialised unit's whole history — receipt, transfers, sale — in time order (Day 15).
+stockLedgerSchema.index(
+  { orgId: 1, serialNo: 1, postedAt: 1 },
+  { partialFilterExpression: { serialNo: { $type: 'string' } } },
+);
 // Every movement a document caused — what a reversal or a cancellation has to find.
 stockLedgerSchema.index({ orgId: 1, refType: 1, refId: 1 });
 

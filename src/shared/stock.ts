@@ -8,6 +8,8 @@
 
 import { z } from 'zod';
 
+import { trackingFields } from './stockDocs.js';
+
 import type { StockMovementType } from './enums.js';
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid id');
@@ -29,6 +31,8 @@ export const openingRowSchema = z
      * may not set them either. Omitted, the stock is valued at zero until the first receipt.
      */
     unitCostMinor: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable().optional(),
+    /** Lot / expiry for LOT-tracked products, serials for SERIAL-tracked — see `@shared/stockDocs`. */
+    ...trackingFields,
   })
   .strict();
 

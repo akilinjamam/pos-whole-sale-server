@@ -1,8 +1,11 @@
 import { Types } from 'mongoose';
 
 import { ApiError } from '../../lib/ApiError.js';
-import { paginate } from '../../lib/paginate.js';
-import { addDays, dayIn, startOfDayIn } from '../../lib/period.js';
+import { escapeRegex, paginate } from '../../lib/paginate.js';
+import { addDays, dayIn, dayToDate, startOfDayIn } from '../../lib/period.js';
+import { expiryFromShelfLife } from '../../domain/warranty.js';
+import { lotForInbound } from '../../services/lot.service.js';
+import { SerialUnit } from '../serialUnit/serialUnit.model.js';
 import { withTransaction } from '../../lib/withTransaction.js';
 import { postMovements } from '../../services/stock.service.js';
 import { toBase, UomError } from '../../shared/uom.js';
@@ -104,6 +107,19 @@ async function namesFor(
   };
 }
 
+/**
+ * `q` on a stock list searches **products** (name or SKU), since that is what someone typing is
+ * looking for; the matching ids then filter the balances or ledger rows.
+ */
+async function productIdsMatching(orgId: Types.ObjectId, q: string): Promise<Types.ObjectId[]> {
+  const term = new RegExp(escapeRegex(q), 'i');
+  const found = await Product.find({ orgId, $or: [{ name: term }, { sku: term }] })
+    .select('_id')
+    .limit(500)
+    .lean();
+  return found.map((p) => p._id);
+}
+
 // ─── Reads ──────────────────────────────────────────────────────────────────────────────
 
 export async function listBalances(
@@ -115,6 +131,8 @@ export async function listBalances(
   if (query.productId) filter.productId = new Types.ObjectId(query.productId);
   if (query.variantId) filter.variantId = new Types.ObjectId(query.variantId);
   if (query.nonZero) filter.$or = [{ qtyOnHand: { $ne: 0 } }, { qtyReserved: { $ne: 0 } }];
+  if (query.q && !query.productId)
+    filter.productId = { $in: await productIdsMatching(actor.orgId, query.q) };
 
   const { items, meta } = await paginate<StockBalanceDoc>(StockBalance, {
     filter,
@@ -145,6 +163,10 @@ export async function listLedger(
   if (query.movementType) filter.movementType = query.movementType;
   if (query.refType) filter.refType = query.refType;
   if (query.refId) filter.refId = new Types.ObjectId(query.refId);
+  if (query.refDocNo) filter.refDocNo = query.refDocNo;
+  if (query.serialNo) filter.serialNo = query.serialNo;
+  if (query.q && !query.productId)
+    filter.productId = { $in: await productIdsMatching(actor.orgId, query.q) };
 
   if (query.from || query.to) {
     const zone = await orgZone(actor.orgId);
@@ -189,6 +211,10 @@ interface PlannedRow {
   variantId: Types.ObjectId | null;
   qtyBase: number;
   unitCostMinor: number | null;
+  lotNo: string | null;
+  mfgDate: string | null;
+  expiryDate: string | null;
+  serials: string[];
 }
 
 const itemKey = (productId: Types.ObjectId, variantId: Types.ObjectId | null) =>
@@ -222,9 +248,9 @@ async function existingOpenings(
  * would otherwise *double* the stock, silently; a correction after cutover is an adjustment
  * (Day 14), which carries a reason.
  *
- * Lot- and serial-tracked products are refused until Day 15 gives them somewhere to record the
- * lot number or the serials: loading 30 machines as an anonymous quantity would leave warranty
- * claims with nothing to trace.
+ * Lot-tracked rows need a lot number (and an expiry where the product requires one); serial-
+ * tracked rows need exactly one serial per unit, none already in stock. Loading 30 machines as an
+ * anonymous quantity would leave every warranty claim with nothing to trace.
  */
 export async function importOpeningStock(
   actor: StockActor,
@@ -271,7 +297,7 @@ export async function importOpeningStock(
   ];
   const [products, variants] = await Promise.all([
     Product.find({ orgId: actor.orgId, sku: { $in: skus } })
-      .select('name sku baseUom packs hasVariants trackingMode')
+      .select('name sku baseUom packs hasVariants trackingMode attrs')
       .lean(),
     variantSkus.length > 0
       ? Variant.find({ orgId: actor.orgId, sku: { $in: variantSkus } })
@@ -290,6 +316,25 @@ export async function importOpeningStock(
   const results: OpeningImportRowResult[] = [];
   const planned: PlannedRow[] = [];
   const seen = new Map<string, number>();
+  const serialRow = new Map<string, number>();
+  const trackingBy = new Map<number, { serials: string[]; expiryDate: string | null }>();
+  // Serials in this file that are already on a shelf somewhere — refused per row, up front.
+  const fileSerials = input.rows.flatMap((r) =>
+    (r.serials ?? []).map((sn) => sn.trim().toUpperCase()),
+  );
+  const inStock = new Set(
+    fileSerials.length
+      ? (
+          await SerialUnit.find({
+            orgId: actor.orgId,
+            serialNo: { $in: fileSerials },
+            status: 'IN_STOCK',
+          })
+            .select('serialNo')
+            .lean()
+        ).map((u) => u.serialNo)
+      : [],
+  );
 
   for (const row of input.rows) {
     const errors: string[] = [];
@@ -301,12 +346,6 @@ export async function importOpeningStock(
     if (!product) {
       errors.push(`No product with SKU ${row.sku}`);
     } else {
-      if (product.trackingMode !== 'NONE') {
-        errors.push(
-          `${row.sku} is ${product.trackingMode.toLowerCase()}-tracked — its opening stock needs lot/serial capture (Day 15)`,
-        );
-      }
-
       if (product.hasVariants && !row.variantSku) {
         errors.push(`${row.sku} is stocked per variant — give a variantSku`);
       } else if (!product.hasVariants && row.variantSku) {
@@ -332,13 +371,48 @@ export async function importOpeningStock(
         else throw error;
       }
 
+      // ── Tracking capture ──
+      const serials = (row.serials ?? []).map((sn) => sn.trim().toUpperCase());
+      if (product.trackingMode === 'SERIAL' && qtyBase !== undefined) {
+        if (serials.length !== qtyBase) {
+          errors.push(
+            `${qtyBase} unit(s) need exactly ${qtyBase} serial number(s) — ${serials.length} given`,
+          );
+        }
+        for (const sn of serials) {
+          if (inStock.has(sn)) errors.push(`Serial ${sn} is already in stock`);
+          const other = serialRow.get(sn);
+          if (other !== undefined) errors.push(`Serial ${sn} is also on row ${other}`);
+          serialRow.set(sn, row.line);
+        }
+      } else if (serials.length > 0) {
+        errors.push(`${row.sku} is not serial-tracked`);
+      }
+
+      let expiryDate = row.expiryDate ?? null;
+      if (product.trackingMode === 'LOT') {
+        if (!row.lotNo) errors.push(`${row.sku} is lot-tracked — give a lotNo`);
+        const accessory = product.attrs?.type === 'ACCESSORY' ? product.attrs : null;
+        if (!expiryDate && row.mfgDate && accessory?.shelfLifeDays) {
+          expiryDate = expiryFromShelfLife(row.mfgDate, accessory.shelfLifeDays);
+        }
+        if (accessory?.requiresExpiry && !expiryDate) {
+          errors.push(`${row.sku} needs an expiryDate (or an mfgDate)`);
+        }
+      } else if (row.lotNo) {
+        errors.push(`${row.sku} is not lot-tracked`);
+      }
+      trackingBy.set(row.line, { serials, expiryDate });
+
       if (errors.length === 0) {
         const key = itemKey(product._id, variantId);
         if (already.has(key))
           errors.push('Already has opening stock here — correct it with an adjustment');
-        const earlier = seen.get(key);
+        // Several lots of one item may open together; the same lot twice may not.
+        const rowKey = `${key}|${product.trackingMode === 'LOT' ? row.lotNo : '-'}`;
+        const earlier = seen.get(rowKey);
         if (earlier !== undefined) errors.push(`Same item as row ${earlier}`);
-        seen.set(key, row.line);
+        seen.set(rowKey, row.line);
       }
     }
 
@@ -353,12 +427,17 @@ export async function importOpeningStock(
       continue;
     }
 
+    const tracking = trackingBy.get(row.line)!;
     planned.push({
       line: row.line,
       productId: product._id,
       variantId,
       qtyBase,
       unitCostMinor: row.unitCostMinor ?? null,
+      lotNo: product.trackingMode === 'LOT' ? (row.lotNo ?? null) : null,
+      mfgDate: row.mfgDate ?? null,
+      expiryDate: tracking.expiryDate,
+      serials: tracking.serials,
     });
     results.push({
       line: row.line,
@@ -394,18 +473,39 @@ export async function importOpeningStock(
         );
       }
 
-      const movements: MovementInput[] = planned.map((p) => ({
-        locationId,
-        productId: p.productId,
-        variantId: p.variantId,
-        qtyBase: p.qtyBase,
-        movementType: 'OPENING',
-        refType: 'OPENING_IMPORT',
-        refId: batchRef,
-        refDocNo,
-        unitCostMinor: p.unitCostMinor,
-        narration: `Opening stock as of ${asOf}`,
-      }));
+      const movements: MovementInput[] = [];
+      for (const p of planned) {
+        const lotId = p.lotNo
+          ? (
+              await lotForInbound(
+                session,
+                actor.orgId,
+                {
+                  productId: p.productId,
+                  variantId: p.variantId,
+                  lotNo: p.lotNo,
+                  mfgDate: dayToDate(p.mfgDate),
+                  expiryDate: dayToDate(p.expiryDate),
+                },
+                actor.actorId,
+              )
+            )._id
+          : null;
+        movements.push({
+          locationId,
+          productId: p.productId,
+          variantId: p.variantId,
+          qtyBase: p.qtyBase,
+          movementType: 'OPENING',
+          refType: 'OPENING_IMPORT',
+          refId: batchRef,
+          refDocNo,
+          unitCostMinor: p.unitCostMinor,
+          narration: `Opening stock as of ${asOf}`,
+          lotId,
+          ...(p.serials.length ? { serials: p.serials } : {}),
+        });
+      }
       await postMovements(session, {
         orgId: actor.orgId,
         movements,

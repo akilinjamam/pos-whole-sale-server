@@ -5,6 +5,7 @@ import barcodeRouter from '../modules/barcode/barcode.route.js';
 import brandRouter from '../modules/brand/brand.route.js';
 import categoryRouter from '../modules/category/category.route.js';
 import healthRouter from '../modules/health/health.route.js';
+import lotRouter from '../modules/lot/lot.route.js';
 import locationRouter from '../modules/location/location.route.js';
 import orgRouter from '../modules/org/org.route.js';
 import { customerRouter, dealerRouter, supplierRouter } from '../modules/party/party.route.js';
@@ -13,6 +14,7 @@ import priceTierRouter from '../modules/priceTier/priceTier.route.js';
 import pricingRouter from '../modules/pricing/pricing.route.js';
 import productRouter from '../modules/product/product.route.js';
 import roleRouter from '../modules/role/role.route.js';
+import serialRouter from '../modules/serialUnit/serialUnit.route.js';
 import stockRouter from '../modules/stock/stock.route.js';
 import stockAdjustmentRouter from '../modules/stockAdjustment/stockAdjustment.route.js';
 import stockCountRouter from '../modules/stockCount/stockCount.route.js';
@@ -77,8 +79,12 @@ export const allRoutes: RouteEntry[] = [
   { path: 'stock-transfers', route: stockTransferRouter },
   { path: 'stock-counts', route: stockCountRouter },
 
-  // Day 15 onwards:
-  // { path: 'lots', route: lotRouter },
+  // Lots, serials, warranty (Day 15) — read-only registers; units and lots move only with stock.
+  { path: 'lots', route: lotRouter },
+  { path: 'serials', route: serialRouter },
+
+  // Day 16 onwards:
+  // { path: 'stock/reconcile', … },
   // …
 ];
 

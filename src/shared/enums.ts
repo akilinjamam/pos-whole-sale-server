@@ -116,6 +116,31 @@ export const OUTBOUND_MOVEMENTS: readonly StockMovementType[] = [
   'DAMAGE',
 ];
 
+// ─── Serials (Day 15) ───────────────────────────────────────────────────────────────────
+
+/**
+ * Where one serialised unit is in its life. Set by `stock.service` from the movement that moved
+ * it — never directly — so a machine's status is always the ledger's latest word on it.
+ */
+export const SERIAL_STATUSES = [
+  'IN_STOCK',
+  /** Between the two legs of a transfer, inside one posting. */
+  'IN_TRANSIT',
+  /** Promised to a confirmed order (Day 22). */
+  'RESERVED',
+  'SOLD',
+  /** Sent back to the supplier (Day 34). */
+  'RETURNED',
+  /** Written off: damaged, lost, missing at a count. */
+  'SCRAPPED',
+  /** Out on a service or repair job. */
+  'IN_SERVICE',
+] as const;
+export type SerialStatus = Member<typeof SERIAL_STATUSES>;
+
+export const WARRANTY_STATES = ['NONE', 'NOT_STARTED', 'ACTIVE', 'EXPIRED'] as const;
+export type WarrantyState = Member<typeof WARRANTY_STATES>;
+
 // ─── Stock documents (Day 14) ───────────────────────────────────────────────────────────
 
 /** Why stock was adjusted. Every adjustment carries one — an unexplained write-off is a loss. */

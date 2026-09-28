@@ -18,11 +18,28 @@ const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid id');
 const note = z.string().trim().max(500).nullable().optional();
 const MAX_LINES = 500;
 
+const day = z.string().date('Use YYYY-MM-DD');
+
+/**
+ * Lot and serial capture (Day 15). Which of these a line needs depends on the product's
+ * `trackingMode`, checked server-side against the product — see `resolveStockLines`.
+ */
+export const trackingFields = {
+  /** LOT-tracked products: the batch number printed on the box. */
+  lotNo: z.string().trim().toUpperCase().min(1).max(40).nullable().optional(),
+  /** For a lot arriving: dates from the box. Expiry defaults to mfg + the product's shelf life. */
+  mfgDate: day.nullable().optional(),
+  expiryDate: day.nullable().optional(),
+  /** SERIAL-tracked products: one serial per base unit, exactly. */
+  serials: z.array(z.string().trim().toUpperCase().min(1).max(60)).max(1000).optional(),
+};
+
 const lineBase = {
   productId: objectId,
   variantId: objectId.nullable().optional(),
   /** Defaults to the product's base unit. */
   uomCode: z.string().trim().toUpperCase().max(10).nullable().optional(),
+  ...trackingFields,
 };
 
 /** A line that only ever moves stock one way — a transfer. */

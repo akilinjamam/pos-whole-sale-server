@@ -10,6 +10,7 @@ import {
   assertStockLocation,
   lineNames,
   resolveStockLines,
+  trackingFor,
 } from '../../services/stockLines.js';
 import { Location } from '../location/location.model.js';
 import { StockLedger } from '../stock/stockLedger.model.js';
@@ -105,7 +106,7 @@ export async function createAdjustment(
   input: CreateAdjustmentInput,
 ): Promise<StockAdjustmentPayload> {
   await assertStockLocation(actor.orgId, input.locationId, 'locationId');
-  const lines = await resolveStockLines(actor.orgId, input.lines);
+  const lines = await resolveStockLines(actor.orgId, input.lines, { inboundCreatesLots: true });
 
   const doc = await StockAdjustment.create({
     orgId: actor.orgId,
@@ -129,7 +130,9 @@ export async function updateAdjustment(
     assertLocationAllowed(actor.user, input.locationId);
     await assertStockLocation(actor.orgId, input.locationId, 'locationId');
   }
-  const lines = input.lines ? await resolveStockLines(actor.orgId, input.lines) : undefined;
+  const lines = input.lines
+    ? await resolveStockLines(actor.orgId, input.lines, { inboundCreatesLots: true })
+    : undefined;
 
   const { matchedCount } = await StockAdjustment.updateOne(
     // `status: 'DRAFT'` again: it may have been posted between the load and now.
@@ -196,17 +199,26 @@ export async function postAdjustment(
       orgId: actor.orgId,
       postedAt,
       actorId: actor.actorId,
-      movements: claimed.lines.map((l) => ({
-        locationId: claimed.locationId,
-        productId: l.productId,
-        variantId: l.variantId,
-        qtyBase: l.qtyBase,
-        movementType: 'ADJUSTMENT',
-        refType: REF_TYPE,
-        refId: claimed._id,
-        refDocNo: docNo,
-        narration: `${claimed.reason}${claimed.note ? `: ${claimed.note}` : ''}`,
-      })),
+      movements: await Promise.all(
+        claimed.lines.map(async (l) => ({
+          locationId: claimed.locationId,
+          productId: l.productId,
+          variantId: l.variantId,
+          qtyBase: l.qtyBase,
+          movementType: 'ADJUSTMENT' as const,
+          refType: REF_TYPE,
+          refId: claimed._id,
+          refDocNo: docNo,
+          narration: `${claimed.reason}${claimed.note ? `: ${claimed.note}` : ''}`,
+          ...(await trackingFor(
+            session,
+            actor.orgId,
+            l,
+            l.qtyBase > 0 ? 'IN' : 'OUT',
+            actor.actorId,
+          )),
+        })),
+      ),
     });
   });
 
@@ -273,6 +285,9 @@ export async function cancelAdjustment(
         refId: id,
         refDocNo: claimed.docNo,
         reversalOfId: o._id,
+        // The original rows are one per serial, so each reversal carries exactly its unit back.
+        lotId: o.lotId,
+        ...(o.serialNo ? { serials: [o.serialNo] } : {}),
         narration: `Cancelled: ${input.reason}`,
       })),
     });

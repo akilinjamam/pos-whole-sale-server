@@ -118,9 +118,7 @@ describe('splitIntoPacks', () => {
   });
 
   it('falls back to base units for a product with no packs', () => {
-    expect(splitIntoPacks(7, { baseUom: 'PCS', packs: [] })).toEqual([
-      { code: 'PCS', qty: 7 },
-    ]);
+    expect(splitIntoPacks(7, { baseUom: 'PCS', packs: [] })).toEqual([{ code: 'PCS', qty: 7 }]);
   });
 });
 

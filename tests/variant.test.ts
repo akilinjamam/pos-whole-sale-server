@@ -75,7 +75,11 @@ describe('describeAxes', () => {
 
 describe('axesPresent', () => {
   it('reports set axes in catalog order, whatever order they arrived in', () => {
-    expect(axesPresent({ size: 'L', sph: -1, color: 'Black' })).toEqual(['sph', 'color', 'size']);
+    expect(axesPresent({ size: 'L', sph: -1, color: 'Black' })).toEqual([
+      'sph',
+      'color',
+      'size',
+    ]);
   });
 
   it('treats null, undefined and empty string as absent', () => {

@@ -1,11 +1,12 @@
 import { asyncHandler } from '../../lib/asyncHandler.js';
-import { actorIdOf, orgIdOf, requireAuth } from '../../lib/requestUser.js';
+import { actorIdOf, orgIdOf, requireAuth, toObjectId } from '../../lib/requestUser.js';
 import { sendData, sendPage } from '../../lib/respond.js';
 import { locationScopeOf } from '../../middleware/requireLocation.js';
 
+import * as reconcileService from './reconcile.service.js';
 import * as stockService from './stock.service.js';
 
-import type { ListBalancesQuery, ListLedgerQuery } from './stock.schema.js';
+import type { ListBalancesQuery, ListLedgerQuery, ReconcileBody } from './stock.schema.js';
 import type { StockActor } from './stock.service.js';
 import type { OpeningImportInput } from '@shared/stock.js';
 import type { Request } from 'express';
@@ -44,5 +45,16 @@ export const importOpening = asyncHandler(async (req, res) => {
   sendData(
     res,
     await stockService.importOpeningStock(actorOf(req), req.body as OpeningImportInput),
+  );
+});
+
+export const reconcile = asyncHandler(async (req, res) => {
+  const { locationId } = req.body as ReconcileBody;
+  sendData(
+    res,
+    await reconcileService.reconcileStock(
+      orgIdOf(req),
+      locationId ? toObjectId(locationId, 'locationId') : undefined,
+    ),
   );
 });

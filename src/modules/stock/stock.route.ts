@@ -10,6 +10,7 @@ import {
   listBalancesQuerySchema,
   listLedgerQuerySchema,
   openingImportSchema,
+  reconcileBodySchema,
 } from './stock.schema.js';
 
 /**
@@ -50,6 +51,20 @@ stockRouter.post(
   requireLocation,
   validate({ body: openingImportSchema }),
   ctrl.importOpening,
+);
+
+/**
+ * Re-sum the ledger and report every cached balance that disagrees — `stock:reconcile`. A POST
+ * although it writes nothing: it is an action someone runs, it can be expensive on a large
+ * ledger, and it should not be triggered by a prefetch or a crawler following a link.
+ */
+stockRouter.post(
+  '/reconcile',
+  authenticate,
+  requirePermission('stock:reconcile'),
+  requireLocation,
+  validate({ body: reconcileBodySchema }),
+  ctrl.reconcile,
 );
 
 export default stockRouter;

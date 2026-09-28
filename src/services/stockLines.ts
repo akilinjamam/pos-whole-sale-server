@@ -1,6 +1,9 @@
 import { Types } from 'mongoose';
 
+import { expiryFromShelfLife } from '../domain/warranty.js';
 import { ApiError } from '../lib/ApiError.js';
+import { dayToDate } from '../lib/period.js';
+import { lotForInbound, lotForOutbound } from './lot.service.js';
 import { toBase, UomError } from '../shared/uom.js';
 import { describeAxes } from '../shared/variant.js';
 import { Location } from '../modules/location/location.model.js';
@@ -9,6 +12,7 @@ import { Variant } from '../modules/variant/variant.model.js';
 
 import type { LineNames, StockDocLineDoc } from '../modules/stock/stockDocLine.js';
 import type { ApiFieldError } from '@shared/types.js';
+import type { ClientSession } from 'mongoose';
 
 /**
  * Turning entered lines into stock lines, once, for every stock document.
@@ -31,22 +35,42 @@ export interface LineInput {
   uomCode?: string | null;
   /** Signed only where the document allows it (adjustments). */
   qty: number;
+  lotNo?: string | null;
+  mfgDate?: string | null;
+  expiryDate?: string | null;
+  serials?: readonly string[];
 }
 
-const itemKey = (productId: string, variantId?: string | null) =>
-  `${productId}|${variantId ?? '-'}`;
+export interface ResolveOptions {
+  path?: string;
+  /**
+   * Whether lot- and serial-tracked products are accepted. Counts say no: counting per lot or per
+   * serial is a different sheet, and a product-level count of them would post a variance that
+   * no lot or serial could be attached to.
+   */
+  allowTracked?: boolean;
+  /**
+   * Whether a positive line brings a lot *into* existence (an adjustment finding stock) and so
+   * needs the box's dates. A transfer only moves lots that already exist.
+   */
+  inboundCreatesLots?: boolean;
+}
+
+/** A lot product may appear once per lot; everything else once per item. */
+const itemKey = (productId: string, variantId?: string | null, lotNo?: string | null) =>
+  `${productId}|${variantId ?? '-'}|${lotNo ?? '-'}`;
 
 export async function resolveStockLines(
   orgId: Types.ObjectId,
   lines: readonly LineInput[],
-  path = 'lines',
+  { path = 'lines', allowTracked = true, inboundCreatesLots = false }: ResolveOptions = {},
 ): Promise<StockDocLineDoc[]> {
   const productIds = [...new Set(lines.map((l) => l.productId))];
   const variantIds = [...new Set(lines.flatMap((l) => (l.variantId ? [l.variantId] : [])))];
 
   const [products, variants] = await Promise.all([
     Product.find({ orgId, _id: { $in: productIds } })
-      .select('sku baseUom packs hasVariants trackingMode')
+      .select('sku baseUom packs hasVariants trackingMode attrs')
       .lean(),
     variantIds.length > 0
       ? Variant.find({ orgId, _id: { $in: variantIds } })
@@ -60,6 +84,7 @@ export async function resolveStockLines(
   const errors: ApiFieldError[] = [];
   const resolved: StockDocLineDoc[] = [];
   const seen = new Map<string, number>();
+  const serialLine = new Map<string, number>();
 
   lines.forEach((line, i) => {
     const at = (field: string) => `${path}.${i}.${field}`;
@@ -68,10 +93,10 @@ export async function resolveStockLines(
       errors.push({ path: at('productId'), message: 'No such product' });
       return;
     }
-    if (product.trackingMode !== 'NONE') {
+    if (product.trackingMode !== 'NONE' && !allowTracked) {
       errors.push({
         path: at('productId'),
-        message: `${product.sku} is ${product.trackingMode.toLowerCase()}-tracked — it needs lot/serial capture (Day 15)`,
+        message: `${product.sku} is ${product.trackingMode.toLowerCase()}-tracked — it cannot be handled here`,
       });
       return;
     }
@@ -91,7 +116,9 @@ export async function resolveStockLines(
       return;
     }
 
-    const key = itemKey(line.productId, line.variantId);
+    const lotNo =
+      product.trackingMode === 'LOT' ? line.lotNo?.trim().toUpperCase() || null : null;
+    const key = itemKey(line.productId, line.variantId, lotNo);
     const earlier = seen.get(key);
     if (earlier !== undefined) {
       errors.push({
@@ -123,12 +150,74 @@ export async function resolveStockLines(
       throw error;
     }
 
+    // ── Tracking capture ──
+    const serials = (line.serials ?? []).map((sn) => sn.trim().toUpperCase());
+    let mfgDate: string | null = null;
+    let expiryDate: string | null = null;
+
+    if (product.trackingMode === 'SERIAL') {
+      if (serials.length !== Math.abs(qtyBase)) {
+        errors.push({
+          path: at('serials'),
+          message: `${Math.abs(qtyBase)} unit(s) need exactly ${Math.abs(qtyBase)} serial number(s) — ${serials.length} given`,
+        });
+        return;
+      }
+      for (const sn of serials) {
+        const other = serialLine.get(sn);
+        if (other !== undefined) {
+          errors.push({
+            path: at('serials'),
+            message:
+              other === i ? `${sn} is listed twice` : `${sn} is also on line ${other + 1}`,
+          });
+          return;
+        }
+        serialLine.set(sn, i);
+      }
+    } else if (serials.length > 0) {
+      errors.push({ path: at('serials'), message: `${product.sku} is not serial-tracked` });
+      return;
+    }
+
+    if (product.trackingMode === 'LOT') {
+      if (!lotNo) {
+        errors.push({
+          path: at('lotNo'),
+          message: `${product.sku} is lot-tracked — give the lot number`,
+        });
+        return;
+      }
+      if (inboundCreatesLots && qtyBase > 0) {
+        mfgDate = line.mfgDate ?? null;
+        expiryDate = line.expiryDate ?? null;
+        const accessory = product.attrs?.type === 'ACCESSORY' ? product.attrs : null;
+        if (!expiryDate && mfgDate && accessory?.shelfLifeDays) {
+          expiryDate = expiryFromShelfLife(mfgDate, accessory.shelfLifeDays);
+        }
+        if (accessory?.requiresExpiry && !expiryDate) {
+          errors.push({
+            path: at('expiryDate'),
+            message: `${product.sku} needs an expiry date (or a manufacture date)`,
+          });
+          return;
+        }
+      }
+    } else if (line.lotNo) {
+      errors.push({ path: at('lotNo'), message: `${product.sku} is not lot-tracked` });
+      return;
+    }
+
     resolved.push({
       productId: product._id,
       variantId: line.variantId ? new Types.ObjectId(line.variantId) : null,
       uomCode,
       qty: line.qty,
       qtyBase,
+      lotNo,
+      mfgDate: dayToDate(mfgDate),
+      expiryDate: dayToDate(expiryDate),
+      serials,
     });
   });
 
@@ -190,4 +279,33 @@ export async function lineNames(
       variantLabel: l.variantId ? (variantBy.get(String(l.variantId)) ?? null) : null,
     };
   };
+}
+
+/**
+ * The lot and serial parts of a movement for one document line, resolved inside the posting
+ * transaction. `IN` gets-or-creates the lot (with the line's dates); `OUT` requires it to exist.
+ */
+export async function trackingFor(
+  session: ClientSession,
+  orgId: Types.ObjectId,
+  line: StockDocLineDoc,
+  direction: 'IN' | 'OUT',
+  actorId: Types.ObjectId,
+): Promise<{ lotId: Types.ObjectId | null; serials?: string[] }> {
+  let lotId: Types.ObjectId | null = null;
+  if (line.lotNo) {
+    const ref = {
+      productId: line.productId,
+      variantId: line.variantId,
+      lotNo: line.lotNo,
+      mfgDate: line.mfgDate,
+      expiryDate: line.expiryDate,
+    };
+    lotId = (
+      direction === 'IN'
+        ? await lotForInbound(session, orgId, ref, actorId)
+        : await lotForOutbound(session, orgId, ref)
+    )._id;
+  }
+  return { lotId, ...(line.serials?.length ? { serials: line.serials } : {}) };
 }

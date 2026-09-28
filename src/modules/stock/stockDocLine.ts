@@ -17,6 +17,12 @@ export interface StockDocLineDoc {
   uomCode: string;
   qty: number;
   qtyBase: number;
+  /** LOT-tracked: the batch, and — for stock arriving — its dates. */
+  lotNo: string | null;
+  mfgDate: Date | null;
+  expiryDate: Date | null;
+  /** SERIAL-tracked: exactly `|qtyBase|` serials. */
+  serials: string[];
 }
 
 export const stockDocLineSchema = new Schema<StockDocLineDoc>(
@@ -26,6 +32,10 @@ export const stockDocLineSchema = new Schema<StockDocLineDoc>(
     uomCode: { type: String, required: true, trim: true, uppercase: true },
     qty: { type: Number, required: true },
     qtyBase: { type: Number, required: true },
+    lotNo: { type: String, trim: true, uppercase: true, default: null },
+    mfgDate: { type: Date, default: null },
+    expiryDate: { type: Date, default: null },
+    serials: { type: [String], default: [] },
   },
   { _id: false },
 );
@@ -51,6 +61,9 @@ export function toStockDocLinePayload(
     uomCode: line.uomCode,
     qty: line.qty,
     qtyBase: line.qtyBase,
+    lotNo: line.lotNo ?? null,
+    expiryDate: line.expiryDate ? line.expiryDate.toISOString().slice(0, 10) : null,
+    serials: line.serials ?? [],
     productName: n.productName,
     sku: n.sku,
     variantLabel: n.variantLabel,

@@ -121,11 +121,20 @@ export async function openCount(
 
   if (productIds.length > 0) {
     const found = await Product.find({ orgId: actor.orgId, _id: { $in: productIds } })
-      .select('_id')
+      .select('sku trackingMode')
       .lean();
     if (found.length !== productIds.length) {
       throw ApiError.validation('Validation failed', [
         { path: 'productIds', message: 'One or more products do not exist' },
+      ]);
+    }
+    const tracked = found.filter((p) => p.trackingMode !== 'NONE');
+    if (tracked.length > 0) {
+      throw ApiError.validation('Validation failed', [
+        {
+          path: 'productIds',
+          message: `${tracked.map((p) => p.sku).join(', ')} ${tracked.length === 1 ? 'is' : 'are'} lot- or serial-tracked — counted by lot or serial, not here`,
+        },
       ]);
     }
   }
@@ -155,10 +164,25 @@ export async function openCount(
       );
     }
 
+    // Lot- and serial-tracked products are left out of an ALL count: a product-level variance
+    // could not say which lot or which unit is missing, so it could not be posted honestly.
+    const trackedIds =
+      productIds.length > 0
+        ? []
+        : (
+            await Product.find({ orgId: actor.orgId, trackingMode: { $ne: 'NONE' } })
+              .select('_id')
+              .session(session)
+              .lean()
+          ).map((p) => p._id);
     const scopeFilter = {
       orgId: actor.orgId,
       locationId,
-      ...(productIds.length > 0 ? { productId: { $in: productIds } } : {}),
+      ...(productIds.length > 0
+        ? { productId: { $in: productIds } }
+        : trackedIds.length > 0
+          ? { productId: { $nin: trackedIds } }
+          : {}),
     };
 
     // A listed product with no stock here still gets a row, so it is frozen and counted — "we
@@ -241,6 +265,7 @@ export async function recordCount(
       uomCode: l.uomCode,
       qty: l.countedQty,
     })),
+    { allowTracked: false },
   );
 
   for (const line of resolved) {

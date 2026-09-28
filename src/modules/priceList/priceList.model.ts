@@ -1,5 +1,6 @@
 import { Schema, model } from 'mongoose';
 
+import { dateToDay } from '../../lib/period.js';
 import { auditableFields, baseSchemaPlugin, idToString } from '../../lib/model.js';
 
 import type { PriceEntryPayload } from '@shared/types.js';
@@ -98,14 +99,8 @@ export const PriceListEntry: PriceEntryModel = model<PriceEntryDoc>(
   priceEntrySchema,
 );
 
-/** `YYYY-MM-DD` ↔ UTC midnight. Never local time — see the note on the model. */
-export function dayToDate(value: string | null | undefined): Date | null {
-  return value ? new Date(`${value}T00:00:00.000Z`) : null;
-}
-
-export function dateToDay(value: Date | null | undefined): string | null {
-  return value ? value.toISOString().slice(0, 10) : null;
-}
+// Moved to lib/period.ts (Day 15) — stock and lots use them too. Re-exported for existing callers.
+export { dateToDay, dayToDate } from '../../lib/period.js';
 
 export interface PriceEntryNames {
   productName?: string;

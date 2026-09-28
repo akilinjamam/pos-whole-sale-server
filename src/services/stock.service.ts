@@ -1,7 +1,11 @@
 import { ApiError } from '../lib/ApiError.js';
 import { roundHalfUp } from '../shared/money.js';
 import { MOVEMENT_SIGN } from '../shared/stock.js';
-import { periodKeyOf } from '../lib/period.js';
+import { dayIn, periodKeyOf } from '../lib/period.js';
+import { warrantyEndDay } from '../domain/warranty.js';
+import { Lot } from '../modules/lot/lot.model.js';
+import { LotBalance } from '../modules/lot/lotBalance.model.js';
+import { SerialUnit } from '../modules/serialUnit/serialUnit.model.js';
 import { Location } from '../modules/location/location.model.js';
 import { Org } from '../modules/org/org.model.js';
 import { Product } from '../modules/product/product.model.js';
@@ -10,7 +14,9 @@ import { StockLedger } from '../modules/stock/stockLedger.model.js';
 import { Variant } from '../modules/variant/variant.model.js';
 
 import type { StockLedgerDoc } from '../modules/stock/stockLedger.model.js';
-import type { StockMovementType } from '@shared/enums.js';
+import type { SerialStatus, StockMovementType } from '@shared/enums.js';
+import { mongo } from 'mongoose';
+
 import type { ClientSession, Types } from 'mongoose';
 
 /**
@@ -51,6 +57,19 @@ export interface MovementInput {
   reversalOfId?: Types.ObjectId | null;
   /** For an OUT that fulfils a reservation (Day 24): how much of `qtyReserved` it releases. */
   releaseReservedBase?: number;
+  /** Required for a LOT-tracked product, and only for one — see `assertTracking`. */
+  lotId?: Types.ObjectId | null;
+  /**
+   * Required for a SERIAL-tracked product: exactly `|qtyBase|` distinct serial numbers. Each
+   * becomes its own ledger row of ±1, so a unit's history is one indexed query.
+   */
+  serials?: readonly string[];
+  /** For a SALE of serialised units (Day 18/24): recorded on each unit sold. */
+  sale?: {
+    partyId?: Types.ObjectId | null;
+    invoiceId?: Types.ObjectId | null;
+    sellPriceMinor?: number | null;
+  };
 }
 
 export interface PostMovementsArgs {
@@ -115,11 +134,19 @@ function assertShape(m: MovementInput, index: number): void {
  * not as "the lens" — so a movement on a variant product must name one, and a movement on a
  * plain product must not.
  */
+interface ProductInfo {
+  _id: Types.ObjectId;
+  sku: string;
+  hasVariants: boolean;
+  trackingMode: 'NONE' | 'LOT' | 'SERIAL';
+  warrantyMonths: number | null;
+}
+
 async function assertReferences(
   session: ClientSession,
   orgId: Types.ObjectId,
   movements: readonly MovementInput[],
-): Promise<void> {
+): Promise<Map<string, ProductInfo>> {
   const unique = (ids: (Types.ObjectId | null)[]) => [
     ...new Set(ids.filter((id): id is Types.ObjectId => Boolean(id)).map(String)),
   ];
@@ -133,7 +160,7 @@ async function assertReferences(
       .session(session)
       .lean(),
     Product.find({ orgId, _id: { $in: productIds } })
-      .select('hasVariants sku')
+      .select('hasVariants sku trackingMode attrs')
       .session(session)
       .lean(),
     variantIds.length > 0
@@ -149,7 +176,18 @@ async function assertReferences(
       { path: 'locationId', message: 'No such location' },
     ]);
 
-  const productBy = new Map(products.map((p) => [String(p._id), p]));
+  const productBy = new Map<string, ProductInfo>(
+    products.map((p) => [
+      String(p._id),
+      {
+        _id: p._id,
+        sku: p.sku,
+        hasVariants: p.hasVariants,
+        trackingMode: p.trackingMode,
+        warrantyMonths: p.attrs?.type === 'MACHINE' ? (p.attrs.warrantyMonths ?? null) : null,
+      },
+    ]),
+  );
   const variantBy = new Map(variants.map((v) => [String(v._id), v]));
 
   for (const m of movements) {
@@ -175,6 +213,252 @@ async function assertReferences(
       ]);
     }
   }
+
+  await assertTracking(session, orgId, movements, productBy);
+  return productBy;
+}
+
+/**
+ * The tracking rules, for every movement of every caller (§6.4):
+ *
+ *  - SERIAL — exactly `|qtyBase|` distinct serials, and no lot. Three machines received with two
+ *    serials is refused, not "mostly right": the third machine would be untraceable forever.
+ *  - LOT — a lot, belonging to this product and variant.
+ *  - NONE — neither; a serial on a pack of cloths is a caller bug.
+ */
+async function assertTracking(
+  session: ClientSession,
+  orgId: Types.ObjectId,
+  movements: readonly MovementInput[],
+  productBy: Map<string, ProductInfo>,
+): Promise<void> {
+  const lotIds = [...new Set(movements.flatMap((m) => (m.lotId ? [String(m.lotId)] : [])))];
+  const lots = lotIds.length
+    ? await Lot.find({ orgId, _id: { $in: lotIds } })
+        .select('productId variantId')
+        .session(session)
+        .lean()
+    : [];
+  const lotBy = new Map(lots.map((l) => [String(l._id), l]));
+
+  for (const m of movements) {
+    const p = productBy.get(String(m.productId))!;
+    const serials = m.serials ?? [];
+
+    if (p.trackingMode === 'SERIAL') {
+      const unique = new Set(serials.map((s) => s.trim().toUpperCase()));
+      if (serials.length !== Math.abs(m.qtyBase) || unique.size !== serials.length) {
+        throw ApiError.validation('Validation failed', [
+          {
+            path: 'serials',
+            message: `${p.sku} is serial-tracked: ${Math.abs(m.qtyBase)} unit(s) need exactly ${Math.abs(m.qtyBase)} distinct serial number(s) — ${unique.size} given`,
+          },
+        ]);
+      }
+    } else if (serials.length > 0) {
+      throw ApiError.validation('Validation failed', [
+        { path: 'serials', message: `${p.sku} is not serial-tracked` },
+      ]);
+    }
+
+    if (p.trackingMode === 'LOT') {
+      const lot = m.lotId ? lotBy.get(String(m.lotId)) : undefined;
+      if (!lot) {
+        throw ApiError.validation('Validation failed', [
+          { path: 'lotNo', message: `${p.sku} is lot-tracked — name the lot` },
+        ]);
+      }
+      if (
+        !lot.productId.equals(m.productId) ||
+        String(lot.variantId ?? '') !== String(m.variantId ?? '')
+      ) {
+        throw ApiError.validation('Validation failed', [
+          { path: 'lotNo', message: `That lot is not a lot of ${p.sku}` },
+        ]);
+      }
+    } else if (m.lotId) {
+      throw ApiError.validation('Validation failed', [
+        { path: 'lotNo', message: `${p.sku} is not lot-tracked` },
+      ]);
+    }
+  }
+}
+
+/** What an outbound movement makes of a serialised unit. */
+function outboundSerialStatus(type: StockMovementType): SerialStatus {
+  switch (type) {
+    case 'SALE':
+      return 'SOLD';
+    case 'TRANSFER_OUT':
+      return 'IN_TRANSIT';
+    case 'PURCHASE_RETURN':
+      return 'RETURNED';
+    default:
+      // DAMAGE, and a negative ADJUSTMENT or COUNT: it is no longer ours to sell.
+      return 'SCRAPPED';
+  }
+}
+
+/**
+ * Move each serialised unit a movement names — one atomic update per unit.
+ *
+ * Inbound: the unit must not already be in stock anywhere. The filter excludes IN_STOCK, so a
+ * unit that is already on a shelf fails to match, the upsert tries to insert, and the unique
+ * index on `serialNo` refuses — the same backstop holds for two receipts racing each other.
+ *
+ * Outbound: the unit must be IN_STOCK **at this location**, as this product. Anything else — sold
+ * already, at the other warehouse, never received — is refused and named.
+ */
+async function moveSerials(
+  session: ClientSession,
+  orgId: Types.ObjectId,
+  m: MovementInput,
+  product: ProductInfo,
+  postedAt: Date,
+  timeZone: string,
+): Promise<void> {
+  for (const raw of m.serials ?? []) {
+    const serialNo = raw.trim().toUpperCase();
+
+    if (m.qtyBase > 0) {
+      try {
+        await SerialUnit.updateOne(
+          { orgId, serialNo, status: { $ne: 'IN_STOCK' }, productId: m.productId },
+          {
+            $set: {
+              status: 'IN_STOCK',
+              locationId: m.locationId,
+              lastMovementAt: postedAt,
+              ...(m.lotId ? { lotId: m.lotId } : {}),
+            },
+            $setOnInsert: {
+              variantId: m.variantId ?? null,
+              receivedAt: postedAt,
+              unitCostMinor: m.unitCostMinor ?? null,
+              warrantyMonths: product.warrantyMonths,
+            },
+          },
+          { upsert: true, session },
+        );
+      } catch (error) {
+        if (error instanceof mongo.MongoServerError && error.code === 11000) {
+          // The duplicate key has already aborted this transaction, so the session is unusable:
+          // read committed state instead — it is only to word the message.
+          const existing = await SerialUnit.findOne({ orgId, serialNo })
+            .select('status productId')
+            .lean();
+          throw ApiError.conflict(
+            'DUPLICATE_DOCUMENT',
+            existing && !existing.productId.equals(m.productId)
+              ? `Serial ${serialNo} belongs to another product`
+              : `Serial ${serialNo} is already in stock`,
+            { serialNo },
+          );
+        }
+        throw error;
+      }
+      continue;
+    }
+
+    const status = outboundSerialStatus(m.movementType);
+    const sold = status === 'SOLD';
+    const endDay =
+      sold && product.warrantyMonths
+        ? warrantyEndDay(dayIn(postedAt, timeZone), product.warrantyMonths)
+        : null;
+
+    const { matchedCount } = await SerialUnit.updateOne(
+      {
+        orgId,
+        serialNo,
+        status: 'IN_STOCK',
+        locationId: m.locationId,
+        productId: m.productId,
+        variantId: m.variantId ?? null,
+      },
+      {
+        $set: {
+          status,
+          locationId: null,
+          lastMovementAt: postedAt,
+          ...(sold
+            ? {
+                soldAt: postedAt,
+                soldPartyId: m.sale?.partyId ?? null,
+                soldInvoiceId: m.sale?.invoiceId ?? null,
+                sellPriceMinor: m.sale?.sellPriceMinor ?? null,
+                // The warranty clock starts at the sale, not at receipt.
+                warrantyStartAt: postedAt,
+                warrantyEndAt: endDay ? new Date(`${endDay}T00:00:00.000Z`) : null,
+              }
+            : {}),
+        },
+      },
+      { session },
+    );
+
+    if (matchedCount === 0) {
+      const unit = await SerialUnit.findOne({ orgId, serialNo })
+        .select('status locationId productId')
+        .session(session)
+        .lean();
+      throw ApiError.conflict(
+        'INSUFFICIENT_STOCK',
+        !unit
+          ? `Serial ${serialNo} was never received`
+          : !unit.productId.equals(m.productId)
+            ? `Serial ${serialNo} belongs to another product`
+            : unit.status !== 'IN_STOCK'
+              ? `Serial ${serialNo} is ${unit.status.toLowerCase().replace('_', ' ')}`
+              : `Serial ${serialNo} is at another location`,
+        { serialNo, status: unit?.status ?? null },
+      );
+    }
+  }
+}
+
+/**
+ * The lot-level balance, moved with the same guard as the product balance: five cannot leave a
+ * lot that holds three, whatever the product's total says.
+ */
+async function moveLot(
+  session: ClientSession,
+  orgId: Types.ObjectId,
+  m: MovementInput,
+  postedAt: Date,
+  allowNegative: boolean,
+): Promise<void> {
+  const key = { orgId, locationId: m.locationId, lotId: m.lotId! };
+  if (m.qtyBase < 0) {
+    const updated = await LotBalance.findOneAndUpdate(
+      { ...key, ...(allowNegative ? {} : { qtyOnHand: { $gte: -m.qtyBase } }) },
+      { $inc: { qtyOnHand: m.qtyBase }, $set: { lastMovementAt: postedAt } },
+      { new: true, session, upsert: allowNegative, setDefaultsOnInsert: true },
+    ).lean();
+    if (!updated) {
+      const current = await LotBalance.findOne(key).session(session).lean();
+      const lot = await Lot.findById(m.lotId).select('lotNo').session(session).lean();
+      throw ApiError.conflict(
+        'INSUFFICIENT_STOCK',
+        `Not enough in lot ${lot?.lotNo ?? ''} here`,
+        {
+          lotId: String(m.lotId),
+          requested: -m.qtyBase,
+          available: current?.qtyOnHand ?? 0,
+        },
+      );
+    }
+    return;
+  }
+  await LotBalance.updateOne(
+    key,
+    {
+      $inc: { qtyOnHand: m.qtyBase },
+      $set: { lastMovementAt: postedAt },
+      $setOnInsert: { productId: m.productId, variantId: m.variantId ?? null },
+    },
+    { upsert: true, session },
+  );
 }
 
 /** The moving average after an inbound movement with a known cost. */
@@ -198,7 +482,8 @@ export async function postMovements(
   const allowNegative = Boolean(org?.settings?.allowNegativeStock);
   const periodKey = periodKeyOf(postedAt, org?.timeZone ?? 'Asia/Dhaka');
 
-  await assertReferences(session, orgId, movements);
+  const productBy = await assertReferences(session, orgId, movements);
+  const timeZone = org?.timeZone ?? 'Asia/Dhaka';
 
   const rows: Omit<StockLedgerDoc, '_id' | 'createdAt'>[] = [];
 
@@ -213,6 +498,13 @@ export async function postMovements(
     };
     const release = m.releaseReservedBase ?? 0;
     let balanceAfter: number;
+
+    // Units and lots first: when a serial is sold already or a lot is short, that is the error
+    // worth reporting — not the product-level shortfall it also causes. All of it is one
+    // transaction, so the order changes only which refusal the user reads.
+    const product = productBy.get(String(m.productId))!;
+    if (m.serials?.length) await moveSerials(session, orgId, m, product, postedAt, timeZone);
+    if (m.lotId) await moveLot(session, orgId, m, postedAt, allowNegative);
 
     if (m.qtyBase < 0) {
       const needed = -m.qtyBase;
@@ -284,27 +576,39 @@ export async function postMovements(
       balanceAfter = updated!.qtyOnHand;
     }
 
-    rows.push({
+    const row = (qtyBase: number, serialNo: string | null, after: number) => ({
       orgId,
       postedAt,
       periodKey,
       locationId: m.locationId,
       productId: m.productId,
       variantId: m.variantId ?? null,
-      lotId: null,
-      serialNo: null,
-      qtyBase: m.qtyBase,
+      lotId: m.lotId ?? null,
+      serialNo,
+      qtyBase,
       movementType: m.movementType,
       refType: m.refType,
       refId: m.refId ?? null,
       refDocNo: m.refDocNo ?? null,
       unitCostMinor: m.unitCostMinor ?? null,
-      valueMinor: m.unitCostMinor != null ? m.unitCostMinor * m.qtyBase : null,
-      balanceAfterBase: balanceAfter,
+      valueMinor: m.unitCostMinor != null ? m.unitCostMinor * qtyBase : null,
+      balanceAfterBase: after,
       reversalOfId: m.reversalOfId ?? null,
       narration: m.narration ?? null,
       createdBy: actorId,
     });
+
+    if (m.serials?.length) {
+      // One row per unit, ±1 each. The balance was moved once for the whole quantity, so each
+      // row's snapshot is worked back from the final figure.
+      const sign = Math.sign(m.qtyBase);
+      const n = m.serials.length;
+      m.serials.forEach((raw, i) => {
+        rows.push(row(sign, raw.trim().toUpperCase(), balanceAfter - sign * (n - 1 - i)));
+      });
+    } else {
+      rows.push(row(m.qtyBase, null, balanceAfter));
+    }
   }
 
   return (await StockLedger.insertMany(rows, { session, ordered: true })).map((d) =>
