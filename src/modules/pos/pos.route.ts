@@ -12,6 +12,7 @@ import {
   closeSessionSchema,
   holdSaleSchema,
   openSessionSchema,
+  posQuoteSchema,
   posSaleSchema,
 } from '../../shared/pos.js';
 
@@ -23,6 +24,7 @@ import type {
   CloseSessionInput,
   HoldSaleInput,
   OpenSessionInput,
+  PosQuoteInput,
   PosSaleInput,
 } from '@shared/pos.js';
 import type { Request } from 'express';
@@ -102,6 +104,17 @@ router.post(
         req.body as CloseSessionInput,
       ),
     ),
+  ),
+);
+
+// ── Quote: price the cart, write nothing ──
+router.post(
+  '/quote',
+  authenticate,
+  requirePermission('pos:sell'),
+  validate({ body: posQuoteSchema }),
+  asyncHandler(async (req, res) =>
+    sendData(res, await sales.quotePosCart(requestActorOf(req), req.body as PosQuoteInput)),
   ),
 );
 

@@ -135,6 +135,17 @@ export const posSaleSchema = z
   })
   .strict();
 
+/** The cart a quote prices — the sale's lines, customer and discount, nothing about payment. */
+export const posQuoteSchema = z
+  .object({
+    partyId: objectId.nullable().optional(),
+    lines: z.array(saleLineSchema).min(1).max(200),
+    orderDiscount: orderDiscountSchema.optional(),
+  })
+  .strict();
+
+export type PosQuoteInput = z.infer<typeof posQuoteSchema>;
+
 export type SaleLineInput = z.infer<typeof saleLineSchema>;
 export type TenderInput = z.infer<typeof tenderSchema>;
 export type PosSaleInput = z.infer<typeof posSaleSchema>;

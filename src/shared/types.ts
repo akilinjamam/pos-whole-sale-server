@@ -997,3 +997,31 @@ export interface HeldSalePayload {
   createdAt: string;
   expiresAt: string;
 }
+
+/** What `POST /pos/quote` returns: the cart priced exactly as the sale will price it. */
+export interface PosQuote {
+  lines: {
+    productId: string;
+    variantId: string | null;
+    description: string;
+    sku: string;
+    trackingMode: 'NONE' | 'LOT' | 'SERIAL';
+    uomCode: string;
+    qty: number;
+    qtyBase: number;
+    unitPriceMinor: number;
+    resolvedPriceMinor: number;
+    priceOverridden: boolean;
+    lineDiscountMinor: number;
+    orderDiscountMinor: number;
+    lineTotalMinor: number;
+    /** Free to sell at the cashier's counter (on hand − reserved), base units; null with no shift. */
+    availableBase: number | null;
+    /** What this line still needs before it can be sold. */
+    needs: 'SERIALS' | 'LOT' | null;
+  }[];
+  grossMinor: number;
+  discountMinor: number;
+  totalMinor: number;
+  customer: { id: string; name: string; isDealer: boolean; balanceMinor: number } | null;
+}

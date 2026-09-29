@@ -54,6 +54,11 @@ export interface ResolveOptions {
    * needs the box's dates. A transfer only moves lots that already exist.
    */
   inboundCreatesLots?: boolean;
+  /**
+   * Whether a tracked line must already carry its serials / lot. True for anything that posts;
+   * false for a counter *quote*, where the cashier has added the machine but not yet scanned it.
+   */
+  requireCapture?: boolean;
 }
 
 /** A lot product may appear once per lot; everything else once per item. */
@@ -63,7 +68,12 @@ const itemKey = (productId: string, variantId?: string | null, lotNo?: string | 
 export async function resolveStockLines(
   orgId: Types.ObjectId,
   lines: readonly LineInput[],
-  { path = 'lines', allowTracked = true, inboundCreatesLots = false }: ResolveOptions = {},
+  {
+    path = 'lines',
+    allowTracked = true,
+    inboundCreatesLots = false,
+    requireCapture = true,
+  }: ResolveOptions = {},
 ): Promise<StockDocLineDoc[]> {
   const productIds = [...new Set(lines.map((l) => l.productId))];
   const variantIds = [...new Set(lines.flatMap((l) => (l.variantId ? [l.variantId] : [])))];
@@ -156,7 +166,7 @@ export async function resolveStockLines(
     let expiryDate: string | null = null;
 
     if (product.trackingMode === 'SERIAL') {
-      if (serials.length !== Math.abs(qtyBase)) {
+      if (requireCapture && serials.length !== Math.abs(qtyBase)) {
         errors.push({
           path: at('serials'),
           message: `${Math.abs(qtyBase)} unit(s) need exactly ${Math.abs(qtyBase)} serial number(s) — ${serials.length} given`,
@@ -181,7 +191,7 @@ export async function resolveStockLines(
     }
 
     if (product.trackingMode === 'LOT') {
-      if (!lotNo) {
+      if (!lotNo && requireCapture) {
         errors.push({
           path: at('lotNo'),
           message: `${product.sku} is lot-tracked — give the lot number`,

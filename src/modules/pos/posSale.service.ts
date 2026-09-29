@@ -29,7 +29,7 @@ import type { RequestActor } from '../../lib/requestUser.js';
 import type { MovementInput } from '../../services/stock.service.js';
 import type { StockDocLineDoc } from '../stock/stockDocLine.js';
 import type { PosSaleInput } from '@shared/pos.js';
-import type { PosSaleResult } from '@shared/types.js';
+import type { PosQuote, PosSaleResult } from '@shared/types.js';
 
 /**
  * `POST /pos/sales` — the counter sale, §9. **One endpoint, one transaction:**
@@ -80,40 +80,27 @@ const paymentPayload = (p: PaymentDocDoc) => ({
   paidAt: p.paidAt.toISOString(),
 });
 
-export async function postPosSale(
+/** The cart as a sale or a quote sees it: a customer, lines and quantities, discounts. */
+export type CartInput = Pick<PosSaleInput, 'lines' | 'partyId' | 'orderDiscount'>;
+
+/**
+ * Validate a cart and price it — **the one pricing path** for both `POST /pos/quote` and the sale.
+ *
+ * Everything the till shows (unit prices, discounts, line and order totals) comes from here, so
+ * the number on the screen is the number the sale charges, to the poisha. `requireCapture: false`
+ * lets a quote price a machine whose serial has not been scanned yet; the sale always requires it.
+ */
+export async function priceCart(
   actor: RequestActor,
-  input: PosSaleInput,
-  options: PostSaleOptions = {},
-): Promise<PosSaleResult> {
-  // ── Idempotency: the till retried a sale that already went through ──
-  const earlier = await Invoice.findOne({
-    orgId: actor.orgId,
-    clientRef: input.clientRef,
-  }).lean();
-  if (earlier) return replay(actor, earlier);
-
-  // ── The shift ──
-  const session = await PosSession.findOne({
-    orgId: actor.orgId,
-    openedByUserId: actor.actorId,
-    status: 'OPEN',
-  }).lean();
-  if (!session) throw ApiError.conflict('ILLEGAL_TRANSITION', 'Open a shift before selling');
-  const locationId = session.locationId;
-
+  input: CartInput,
+  { requireCapture = true } = {},
+) {
   // ── The customer ──
   const party = input.partyId
     ? await Party.findOne({ _id: input.partyId, orgId: actor.orgId, isActive: true }).lean()
     : null;
   if (input.partyId && !party) throw refuse('partyId', 'No such customer or dealer');
   const isDealer = Boolean(party?.roles.includes('DEALER'));
-  if (input.paymentMode === 'CREDIT' && !isDealer) {
-    // An anonymous walk-in, or a counter customer without an account, pays in full.
-    throw refuse(
-      'paymentMode',
-      'Credit is for dealers only — a walk-in or counter customer pays in full',
-    );
-  }
 
   // ── Lines: product, variant, unit, lot and serial rules (shared with every stock document) ──
   const stockLines = await resolveStockLines(
@@ -126,12 +113,13 @@ export async function postPosSale(
       lotNo: l.lotNo,
       serials: l.serials,
     })),
+    { requireCapture },
   );
   const products = await Product.find({
     orgId: actor.orgId,
     _id: { $in: stockLines.map((l) => l.productId) },
   })
-    .select('name sku isActive isSellableAtCounter')
+    .select('name sku isActive isSellableAtCounter trackingMode baseUom')
     .lean();
   const productBy = new Map(products.map((p) => [String(p._id), p]));
   stockLines.forEach((l, i) => {
@@ -212,6 +200,40 @@ export async function postPosSale(
   } catch (error) {
     if (error instanceof PricingError) throw refuse(error.field, error.message);
     throw error;
+  }
+
+  return { party, isDealer, stockLines, productBy, variantLabel, priced, totals };
+}
+
+export async function postPosSale(
+  actor: RequestActor,
+  input: PosSaleInput,
+  options: PostSaleOptions = {},
+): Promise<PosSaleResult> {
+  // ── Idempotency: the till retried a sale that already went through ──
+  const earlier = await Invoice.findOne({
+    orgId: actor.orgId,
+    clientRef: input.clientRef,
+  }).lean();
+  if (earlier) return replay(actor, earlier);
+
+  // ── The shift ──
+  const session = await PosSession.findOne({
+    orgId: actor.orgId,
+    openedByUserId: actor.actorId,
+    status: 'OPEN',
+  }).lean();
+  if (!session) throw ApiError.conflict('ILLEGAL_TRANSITION', 'Open a shift before selling');
+  const locationId = session.locationId;
+
+  const { party, isDealer, stockLines, productBy, variantLabel, priced, totals } =
+    await priceCart(actor, input);
+  if (input.paymentMode === 'CREDIT' && !isDealer) {
+    // An anonymous walk-in, or a counter customer without an account, pays in full.
+    throw refuse(
+      'paymentMode',
+      'Credit is for dealers only — a walk-in or counter customer pays in full',
+    );
   }
 
   // ── Tenders ──
@@ -523,4 +545,83 @@ export async function getPosSale(
   }).lean();
   if (!invoice) throw ApiError.notFound('Sale');
   return { ...(await replay(actor, invoice)), replayed: false };
+}
+
+/**
+ * `POST /pos/quote` — price the cart exactly as the sale would, and write nothing.
+ *
+ * The till calls it as the cart changes, so every figure on the screen is the server's. It also
+ * reports what is on hand at the cashier's counter, so "only 3 left" is visible before the sale is
+ * refused — and which lines still need a serial or a lot scanned.
+ */
+export async function quotePosCart(actor: RequestActor, input: CartInput): Promise<PosQuote> {
+  const { party, isDealer, stockLines, productBy, variantLabel, priced, totals } =
+    await priceCart(actor, input, {
+      requireCapture: false,
+    });
+
+  const session = await PosSession.findOne({
+    orgId: actor.orgId,
+    openedByUserId: actor.actorId,
+    status: 'OPEN',
+  })
+    .select('locationId')
+    .lean();
+  const balances = session
+    ? await StockBalance.find({
+        orgId: actor.orgId,
+        locationId: session.locationId,
+        productId: { $in: stockLines.map((l) => l.productId) },
+      })
+        .select('productId variantId qtyOnHand qtyReserved')
+        .lean()
+    : [];
+
+  return {
+    lines: stockLines.map((l, i) => {
+      const p = productBy.get(String(l.productId))!;
+      const bal = balances.find(
+        (b) =>
+          b.productId.equals(l.productId) &&
+          String(b.variantId ?? '') === String(l.variantId ?? ''),
+      );
+      const needs =
+        p.trackingMode === 'SERIAL' && l.serials.length !== l.qtyBase
+          ? ('SERIALS' as const)
+          : p.trackingMode === 'LOT' && !l.lotNo
+            ? ('LOT' as const)
+            : null;
+      return {
+        productId: String(l.productId),
+        variantId: l.variantId ? String(l.variantId) : null,
+        description: [p.name, l.variantId ? variantLabel.get(String(l.variantId)) : null]
+          .filter(Boolean)
+          .join(' — '),
+        sku: p.sku,
+        trackingMode: p.trackingMode,
+        uomCode: l.uomCode,
+        qty: l.qty,
+        qtyBase: l.qtyBase,
+        unitPriceMinor: priced[i]!.unitPriceMinor,
+        resolvedPriceMinor: priced[i]!.resolvedMinor,
+        priceOverridden: priced[i]!.overridden,
+        lineDiscountMinor: totals.lines[i]!.lineDiscountMinor,
+        orderDiscountMinor: totals.lines[i]!.orderDiscountMinor,
+        lineTotalMinor: totals.lines[i]!.netMinor,
+        availableBase: session ? (bal ? bal.qtyOnHand - bal.qtyReserved : 0) : null,
+        needs,
+      };
+    }),
+    grossMinor: totals.grossMinor,
+    discountMinor: totals.lineDiscountMinor + totals.orderDiscountMinor,
+    totalMinor: totals.totalMinor,
+    customer: party
+      ? {
+          id: String(party._id),
+          name: party.displayName ?? party.name,
+          isDealer,
+          balanceMinor: party.currentBalanceMinor,
+        }
+      : null,
+  };
 }
