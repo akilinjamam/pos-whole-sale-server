@@ -4,6 +4,7 @@ import { DOCUMENT_STATUSES, PAYMENT_STATUSES, SALES_CHANNELS } from '../../share
 import { auditableFields, baseSchemaPlugin } from '../../lib/model.js';
 
 import type { DocumentStatus, PaymentStatus, SalesChannel } from '@shared/enums.js';
+import type { InvoicePayload } from '@shared/types.js';
 import type { Model, Types } from 'mongoose';
 
 /**
@@ -78,6 +79,9 @@ export interface InvoiceDoc {
   balanceMinor: number;
   paymentStatus: PaymentStatus;
   salespersonUserId: Types.ObjectId | null;
+  /** The till's idempotency key for a counter sale — see `posSaleSchema.clientRef`. */
+  clientRef: string | null;
+  note: string | null;
   postedAt: Date | null;
   postedBy: Types.ObjectId | null;
   cancelledAt: Date | null;
@@ -152,6 +156,8 @@ const invoiceSchema = new Schema<InvoiceDoc>(
     balanceMinor: { type: Number, default: 0 },
     paymentStatus: { type: String, enum: PAYMENT_STATUSES, default: 'UNPAID' },
     salespersonUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+    clientRef: { type: String, default: null },
+    note: { type: String, trim: true, default: null },
     postedAt: { type: Date, default: null },
     postedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
     cancelledAt: { type: Date, default: null },
@@ -172,6 +178,15 @@ invoiceSchema.index(
     name: 'invoice_number_unique',
   },
 );
+// Idempotency: one sale per till-generated key. A retried POST finds the first and returns it.
+invoiceSchema.index(
+  { orgId: 1, clientRef: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { clientRef: { $type: 'string' } },
+    name: 'invoice_client_ref_unique',
+  },
+);
 // A dealer's invoices by date — the statement and the dealer profile's Invoices tab.
 invoiceSchema.index({ orgId: 1, partyId: 1, invoiceDate: -1 });
 // Ageing (Day 30): open invoices by how overdue they are.
@@ -184,3 +199,43 @@ invoiceSchema.index(
 );
 
 export const Invoice: Model<InvoiceDoc> = model<InvoiceDoc>('Invoice', invoiceSchema);
+
+export function toInvoicePayload(doc: InvoiceDoc): InvoicePayload {
+  return {
+    id: String(doc._id),
+    docNo: doc.docNo,
+    series: doc.series,
+    channel: doc.channel,
+    status: doc.status,
+    partyId: doc.partyId ? String(doc.partyId) : null,
+    customerName: doc.partySnapshot?.name ?? doc.walkInName ?? null,
+    walkInPhone: doc.walkInPhone ?? null,
+    locationId: String(doc.locationId),
+    posSessionId: doc.posSessionId ? String(doc.posSessionId) : null,
+    invoiceDate: doc.invoiceDate.toISOString(),
+    dueDate: doc.dueDate ? doc.dueDate.toISOString() : null,
+    lines: doc.lines.map((l) => ({
+      id: String((l as InvoiceLineDoc & { _id: Types.ObjectId })._id),
+      productId: String(l.productId),
+      variantId: l.variantId ? String(l.variantId) : null,
+      description: l.description,
+      serials: l.serials ?? [],
+      lotId: l.lotId ? String(l.lotId) : null,
+      uomCode: l.uomCode,
+      uomQty: l.uomQty,
+      qtyBase: l.qtyBase,
+      unitPriceMinor: l.unitPriceMinor,
+      discountMinor: l.discountMinor,
+      lineTotalMinor: l.lineTotalMinor,
+      priceOverridden: l.priceOverridden,
+    })),
+    subtotalMinor: doc.subtotalMinor,
+    discountMinor: doc.discountMinor,
+    taxMinor: doc.taxMinor,
+    grandTotalMinor: doc.grandTotalMinor,
+    paidMinor: doc.paidMinor,
+    balanceMinor: doc.balanceMinor,
+    paymentStatus: doc.paymentStatus,
+    postedAt: doc.postedAt ? doc.postedAt.toISOString() : null,
+  };
+}

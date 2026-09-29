@@ -9,6 +9,7 @@ import lotRouter from '../modules/lot/lot.route.js';
 import numberSeriesRouter from '../modules/numberSeries/numberSeries.route.js';
 import locationRouter from '../modules/location/location.route.js';
 import orgRouter from '../modules/org/org.route.js';
+import posRouter from '../modules/pos/pos.route.js';
 import { customerRouter, dealerRouter, supplierRouter } from '../modules/party/party.route.js';
 import priceListRouter from '../modules/priceList/priceList.route.js';
 import priceTierRouter from '../modules/priceTier/priceTier.route.js';
@@ -87,9 +88,11 @@ export const allRoutes: RouteEntry[] = [
   // Document numbering (Day 17). Invoices and payments are posted by their own modules from Day 18.
   { path: 'number-series', route: numberSeriesRouter },
 
-  // Day 18 onwards:
-  // { path: 'pos', route: posRouter },
-  // …
+  // The counter (Day 18): sessions, sales, held sales. A sale is an Invoice + receipts + stock
+  // movements (+ ledger on credit), written by one endpoint in one transaction.
+  { path: 'pos', route: posRouter },
+
+  // Day 19 onwards: the sale screen (client).
 ];
 
 /** Paths that skip authentication, as full mount prefixes. */

@@ -890,3 +890,110 @@ export interface NumberSeriesPayload {
   /** What the next post would be numbered. A forecast: a concurrent post may take it first. */
   nextNumber: string;
 }
+
+// ─── Counter (Day 18) ───────────────────────────────────────────────────────────────────
+
+export interface PosSessionPayload {
+  id: string;
+  locationId: string;
+  locationName?: string;
+  terminalCode: string;
+  status: 'OPEN' | 'CLOSED';
+  openedByUserId: string;
+  openedByName?: string;
+  openedAt: string;
+  openingFloatMinor: number;
+  closedAt: string | null;
+  /** Float + cash taken − cash refunded. Live while open; frozen at close. */
+  expectedCashMinor: number;
+  countedCashMinor: number | null;
+  /** counted − expected: negative is a shortage. */
+  varianceMinor: number | null;
+  denominations: { note: number; count: number }[];
+  totals: {
+    salesCount: number;
+    grossMinor: number;
+    discountMinor: number;
+    returnsMinor: number;
+    netMinor: number;
+    byMethod: { method: string; amountMinor: number }[];
+  };
+}
+
+export interface InvoiceLinePayload {
+  id: string;
+  productId: string;
+  variantId: string | null;
+  description: string;
+  serials: string[];
+  lotId: string | null;
+  uomCode: string;
+  uomQty: number;
+  qtyBase: number;
+  unitPriceMinor: number;
+  discountMinor: number;
+  lineTotalMinor: number;
+  priceOverridden: boolean;
+}
+
+export interface InvoicePayload {
+  id: string;
+  docNo: string | null;
+  series: 'WS' | 'POS';
+  channel: 'WHOLESALE' | 'COUNTER';
+  status: 'DRAFT' | 'POSTED' | 'CANCELLED';
+  partyId: string | null;
+  customerName: string | null;
+  walkInPhone: string | null;
+  locationId: string;
+  posSessionId: string | null;
+  invoiceDate: string;
+  dueDate: string | null;
+  lines: InvoiceLinePayload[];
+  subtotalMinor: number;
+  discountMinor: number;
+  taxMinor: number;
+  grandTotalMinor: number;
+  paidMinor: number;
+  balanceMinor: number;
+  paymentStatus: 'UNPAID' | 'PARTIAL' | 'PAID' | 'OVERPAID';
+  postedAt: string | null;
+}
+
+export interface PaymentDocPayload {
+  id: string;
+  docNo: string;
+  method: string;
+  amountMinor: number;
+  paidAt: string;
+}
+
+export interface PosSaleResult {
+  invoice: InvoicePayload;
+  payments: PaymentDocPayload[];
+  /** Cash to hand back: cash tendered − what the cash had to cover. */
+  changeMinor: number;
+  /** True when this response replays an earlier sale with the same `clientRef`. */
+  replayed: boolean;
+}
+
+export interface HeldSalePayload {
+  id: string;
+  label: string;
+  partyId: string | null;
+  walkInName: string | null;
+  lines: {
+    productId: string;
+    variantId?: string | null;
+    uomCode?: string | null;
+    qty: number;
+    serials?: string[];
+    lotNo?: string | null;
+    unitPriceMinor?: number;
+    lineDiscountMinor?: number;
+  }[];
+  orderDiscount: { kind: 'AMOUNT'; amountMinor: number } | { kind: 'PCT'; pct: number } | null;
+  note: string | null;
+  createdAt: string;
+  expiresAt: string;
+}
