@@ -17,6 +17,7 @@
     "format": "prettier --write \"src/**/*.ts\"",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "check:shared": "node check-shared.mjs",
     "verify": "npm run check:shared && npm run typecheck && npm run lint && npm test",
     "db:up": "docker compose up -d",

@@ -17,6 +17,8 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['tests/**/*.test.ts'],
+    // Integration tests need a live replica set — see vitest.integration.config.ts.
+    exclude: ['tests/integration/**', 'node_modules/**'],
     // Models register themselves with mongoose on import. Running files in parallel processes
     // is fine, but a shared process would hit "Cannot overwrite model once compiled".
     pool: 'forks',

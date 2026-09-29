@@ -1,18 +1,22 @@
 import { Schema, model } from 'mongoose';
 
+import { NumberSeries } from '../modules/numberSeries/numberSeries.model.js';
 import { Org } from '../modules/org/org.model.js';
+import { defaultSeriesConfig, formatNumber, periodFor } from '../shared/numbering.js';
 
 import { dayIn } from './period.js';
 
 import type { DocSeries } from '@shared/enums.js';
+import type { SeriesConfig } from '@shared/numbering.js';
 import type { ClientSession, Types } from 'mongoose';
 
 /**
  * Atomic sequences, one document per `(org, series, period)`.
  *
- * `nextSequence` is the primitive; `nextDocNo` below adds fiscal-year periods (Day 14). Day 17
- * adds configurable number series on top, and **must keep the key format**: party codes already issued live in the
- * `…:DLR:ALL` document, and a different key would restart them at 1 and collide with every one.
+ * `nextSequence` is the primitive; `nextDocNo` below adds periods and the org's configured format
+ * (`NumberSeries`, Day 17). The key format `${orgId}:${series}:${period}` is permanent: party codes
+ * live in `…:DLR:ALL` and every yearly series in `…:<SERIES>:<fy>`, and a different key would
+ * restart them at 1 and collide with every number already issued.
  */
 interface CounterDoc {
   /** `${orgId}:${series}:${period}` — see `counterKey`. */
@@ -75,20 +79,55 @@ export function fiscalYearLabel(day: string, startMonth: number): string {
 
 export const DOC_NO_PADDING = 5;
 
+/** A number in the *default* format — `ADJ-2627-00007`. Kept for tests and callers that need no config. */
 export function formatDocNo(series: DocSeries, period: string, seq: number): string {
-  return `${series}-${period}-${String(seq).padStart(DOC_NO_PADDING, '0')}`;
+  return formatNumber(defaultSeriesConfig(series), period, seq);
+}
+
+/** The org's configuration for a series, or the default when it has none. */
+export async function seriesConfig(
+  orgId: Types.ObjectId,
+  series: DocSeries,
+  session?: ClientSession,
+): Promise<SeriesConfig> {
+  const q = NumberSeries.findOne({ orgId, series }).select(
+    'prefix padding resetPolicy separator',
+  );
+  const row = await (session ? q.session(session) : q).lean();
+  return row
+    ? {
+        prefix: row.prefix,
+        padding: row.padding,
+        resetPolicy: row.resetPolicy,
+        separator: row.separator,
+      }
+    : defaultSeriesConfig(series);
+}
+
+/** The period a document dated `at` falls in, for this org and series policy. */
+async function periodOf(
+  orgId: Types.ObjectId,
+  cfg: SeriesConfig,
+  at: Date,
+  session?: ClientSession,
+): Promise<string> {
+  const q = Org.findById(orgId).select('timeZone fiscalYearStartMonth');
+  const org = await (session ? q.session(session) : q).lean();
+  const day = dayIn(at, org?.timeZone ?? 'Asia/Dhaka');
+  return periodFor(cfg.resetPolicy, day, fiscalYearLabel(day, org?.fiscalYearStartMonth ?? 7));
 }
 
 /**
- * The next number in a yearly-reset series — `ADJ-2627-00001`.
+ * The next number in a series — `WS-2627-00042` by default, or as the org has configured it.
  *
- * Minimal on purpose: Day 17 adds the configurable `NumberSeries` (prefixes, padding, reset
- * policy per series) on top of this, keeping the counter key `${orgId}:${series}:${fy}` so no
- * number already issued is ever issued again.
+ * The three properties §10 asks of numbering:
+ *  1. **Atomic** — one `$inc` on the counter document; two posts can never get the same number.
+ *  2. **Transactional** — the increment joins the caller's session, so a post that fails after
+ *     taking a number gives it back. That, plus drafts carrying no number, keeps series gapless.
+ *  3. **Backstopped** — every numbered collection has a unique index on its number, so even a
+ *     bug here would surface as a 409, never as two invoices with one number.
  *
- * **Must be called inside the posting transaction.** The increment joins the caller's session,
- * so a post that fails after taking a number gives it back, and drafts — which have no number —
- * never consume one. That is what keeps the sequence gapless.
+ * **Must be called inside the posting transaction.**
  */
 export async function nextDocNo(
   session: ClientSession,
@@ -96,12 +135,23 @@ export async function nextDocNo(
   series: DocSeries,
   at: Date,
 ): Promise<string> {
-  const org = await Org.findById(orgId)
-    .select('timeZone fiscalYearStartMonth')
-    .session(session)
-    .lean();
-  const day = dayIn(at, org?.timeZone ?? 'Asia/Dhaka');
-  const period = fiscalYearLabel(day, org?.fiscalYearStartMonth ?? 7);
+  const cfg = await seriesConfig(orgId, series, session);
+  const period = await periodOf(orgId, cfg, at, session);
   const seq = await nextSequence(counterKey(orgId, series, period), session);
-  return formatDocNo(series, period, seq);
+  return formatNumber(cfg, period, seq);
+}
+
+/**
+ * The number the next post *would* get — for a settings preview. Reads the counter without
+ * incrementing it, so it is a forecast: a concurrent post may take it first.
+ */
+export async function peekDocNo(
+  orgId: Types.ObjectId,
+  series: DocSeries,
+  at: Date,
+): Promise<string> {
+  const cfg = await seriesConfig(orgId, series);
+  const period = await periodOf(orgId, cfg, at);
+  const counter = await Counter.findById(counterKey(orgId, series, period)).lean();
+  return formatNumber(cfg, period, (counter?.seq ?? 0) + 1);
 }

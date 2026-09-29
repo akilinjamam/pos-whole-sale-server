@@ -6,6 +6,7 @@ import brandRouter from '../modules/brand/brand.route.js';
 import categoryRouter from '../modules/category/category.route.js';
 import healthRouter from '../modules/health/health.route.js';
 import lotRouter from '../modules/lot/lot.route.js';
+import numberSeriesRouter from '../modules/numberSeries/numberSeries.route.js';
 import locationRouter from '../modules/location/location.route.js';
 import orgRouter from '../modules/org/org.route.js';
 import { customerRouter, dealerRouter, supplierRouter } from '../modules/party/party.route.js';
@@ -83,8 +84,11 @@ export const allRoutes: RouteEntry[] = [
   { path: 'lots', route: lotRouter },
   { path: 'serials', route: serialRouter },
 
-  // Day 16 onwards:
-  // { path: 'stock/reconcile', … },
+  // Document numbering (Day 17). Invoices and payments are posted by their own modules from Day 18.
+  { path: 'number-series', route: numberSeriesRouter },
+
+  // Day 18 onwards:
+  // { path: 'pos', route: posRouter },
   // …
 ];
 

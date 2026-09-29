@@ -14,6 +14,7 @@ import type {
   PartyRole,
   ProductType,
   StockMovementType,
+  DocSeries,
   SerialStatus,
   WarrantyState,
   AdjustmentReason,
@@ -24,6 +25,7 @@ import type {
   VariantAxis,
 } from './enums.js';
 import type { ProductAttrs } from './catalog.js';
+import type { ResetPolicy } from './numbering.js';
 import type { VariantAxisValues } from './variant.js';
 import type { Permission } from './permissions.js';
 
@@ -871,4 +873,20 @@ export interface ReconcileResult {
   serialDrift: ReconcileDriftPayload[];
   /** True when every cache agrees with the ledger. */
   clean: boolean;
+}
+
+// ─── Number series (Day 17) ─────────────────────────────────────────────────────────────
+
+export interface NumberSeriesPayload {
+  series: DocSeries;
+  prefix: string;
+  padding: number;
+  resetPolicy: ResetPolicy;
+  separator: string;
+  /** False while the series runs on the defaults — no row exists yet. */
+  configured: boolean;
+  /** Party codes cannot be reconfigured — see `LOCKED_SERIES`. */
+  locked: boolean;
+  /** What the next post would be numbered. A forecast: a concurrent post may take it first. */
+  nextNumber: string;
 }
