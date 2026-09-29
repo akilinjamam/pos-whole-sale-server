@@ -9,7 +9,7 @@
 
 import { z } from 'zod';
 
-import { MFS_PROVIDERS } from './enums.js';
+import { MFS_PROVIDERS, RETURN_REASONS } from './enums.js';
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid id');
 const minor = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
@@ -66,7 +66,11 @@ export const saleLineSchema = z
   })
   .strict();
 
-export const POS_TENDERS = ['CASH', 'CARD', 'MFS', 'BANK', 'CHEQUE'] as const;
+/**
+ * `EXCHANGE` spends the credit of a counter return settled as an exchange (Day 20): the customer
+ * brought something back and takes something else. It is exact like card — it gives no change.
+ */
+export const POS_TENDERS = ['CASH', 'CARD', 'MFS', 'BANK', 'CHEQUE', 'EXCHANGE'] as const;
 export type PosTender = (typeof POS_TENDERS)[number];
 
 export const tenderSchema = z
@@ -92,9 +96,17 @@ export const tenderSchema = z
       .optional(),
     /** Card slip or bank transfer reference. */
     reference: z.string().trim().max(60).nullable().optional(),
+    /** For `EXCHANGE`: the return whose credit this spends. */
+    returnId: objectId.optional(),
   })
   .strict()
   .superRefine((t, ctx) => {
+    if (t.method === 'EXCHANGE' && !t.returnId)
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['returnId'],
+        message: 'Which return is being exchanged?',
+      });
     if (t.method === 'MFS' && !t.mfs)
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -164,3 +176,47 @@ export const holdSaleSchema = z
   .strict();
 
 export type HoldSaleInput = z.infer<typeof holdSaleSchema>;
+
+// ─── Counter returns (Day 20) ───────────────────────────────────────────────────────────
+
+/**
+ * How a counter return is settled:
+ *
+ *  - `CASH_REFUND` — cash back from the drawer (the Z-report nets it off);
+ *  - `REPLACEMENT` — an exchange: the value becomes a credit the next sale spends as an
+ *    `EXCHANGE` tender;
+ *  - `CREDIT_NOTE` — a dealer's counter sale on account: the account is credited.
+ */
+export const COUNTER_RETURN_SETTLEMENTS = [
+  'CASH_REFUND',
+  'REPLACEMENT',
+  'CREDIT_NOTE',
+] as const;
+export type CounterReturnSettlement = (typeof COUNTER_RETURN_SETTLEMENTS)[number];
+
+export const counterReturnLineSchema = z
+  .object({
+    invoiceLineId: objectId,
+    /** Base units — a returned dozen is 12. */
+    qtyBase: z.number().int('Whole units only').min(1, 'At least 1').max(100_000),
+    /** Serialised lines name exactly which units came back. */
+    serials: z.array(z.string().trim().toUpperCase().min(1).max(60)).max(1000).optional(),
+    /** GOOD goes back on the shelf; DAMAGED comes back in and is written off at once. */
+    condition: z.enum(['GOOD', 'DAMAGED']).default('GOOD'),
+  })
+  .strict();
+
+export const counterReturnSchema = z
+  .object({
+    /** Idempotency key, like a sale's: a retried return is not refunded twice. */
+    clientRef: z.string().trim().min(8).max(64),
+    invoiceId: objectId,
+    reason: z.enum(RETURN_REASONS),
+    settlement: z.enum(COUNTER_RETURN_SETTLEMENTS),
+    lines: z.array(counterReturnLineSchema).min(1, 'Choose what is coming back').max(200),
+    note: z.string().trim().max(300).nullable().optional(),
+  })
+  .strict();
+
+export type CounterReturnLineInput = z.infer<typeof counterReturnLineSchema>;
+export type CounterReturnInput = z.infer<typeof counterReturnSchema>;

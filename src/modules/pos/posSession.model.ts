@@ -33,6 +33,9 @@ export interface PosSessionDoc {
     returnsMinor: number;
     netMinor: number;
     byMethod: { method: string; amountMinor: number }[];
+    returnsCount?: number;
+    cashInMinor?: number;
+    cashOutMinor?: number;
   } | null;
   closeNote: string | null;
   createdBy: Types.ObjectId | null;

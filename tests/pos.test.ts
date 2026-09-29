@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { checkCredit } from '../src/domain/creditCheck.js';
+import { returnValueMinor } from '../src/domain/returns.js';
 import { applyTenders, TenderError } from '../src/domain/tenders.js';
 
 /** The counter's money arithmetic: change, split tenders, and the credit check. */
@@ -99,5 +100,26 @@ describe('checkCredit', () => {
 
   it('asks nothing when no credit is being extended', () => {
     expect(checkCredit({ ...dealer, creditHold: true }, 0, true).ok).toBe(true);
+  });
+});
+
+describe('returnValueMinor', () => {
+  // A line of 3 at a net ৳100.00 — thirds do not divide into poisha evenly.
+  const line = { lineTotalMinor: 10_000, qtyBase: 3, qtyReturnedBase: 0 };
+
+  it('returns a whole line for exactly its net total', () => {
+    expect(returnValueMinor(line, 3)).toBe(10_000);
+  });
+
+  it('adds up to the line total however it is returned piece by piece', () => {
+    const one = returnValueMinor(line, 1);
+    const two = returnValueMinor({ ...line, qtyReturnedBase: 1 }, 1);
+    const three = returnValueMinor({ ...line, qtyReturnedBase: 2 }, 1);
+    expect([one, two, three]).toEqual([3_333, 3_334, 3_333]);
+    expect(one + two + three).toBe(10_000);
+  });
+
+  it('refuses returning more than was sold', () => {
+    expect(() => returnValueMinor({ ...line, qtyReturnedBase: 2 }, 2)).toThrow(RangeError);
   });
 });

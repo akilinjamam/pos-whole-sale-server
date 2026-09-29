@@ -40,6 +40,13 @@ export interface InvoiceLineDoc {
   /** Set when the price was overridden by someone with `order:priceOverride`. */
   priceOverridden: boolean;
   originalPriceMinor: number | null;
+  /**
+   * What has come back against this line (Day 20). Bumped by each posted return inside its own
+   * transaction; since that transaction also writes this invoice, two returns racing for the same
+   * line conflict and the retry re-checks — a line cannot be returned twice over.
+   */
+  qtyReturnedBase: number;
+  returnedSerials: string[];
 }
 
 export interface InvoiceDoc {
@@ -111,6 +118,8 @@ const lineSchema = new Schema<InvoiceLineDoc>(
     costAtSaleMinor: { type: Number, default: null },
     priceOverridden: { type: Boolean, default: false },
     originalPriceMinor: { type: Number, default: null },
+    qtyReturnedBase: { type: Number, default: 0, min: 0 },
+    returnedSerials: { type: [String], default: [] },
   },
   { _id: true },
 );
@@ -210,6 +219,9 @@ export function toInvoicePayload(doc: InvoiceDoc): InvoicePayload {
     partyId: doc.partyId ? String(doc.partyId) : null,
     customerName: doc.partySnapshot?.name ?? doc.walkInName ?? null,
     walkInPhone: doc.walkInPhone ?? null,
+    customerPhone: doc.partySnapshot?.phone ?? doc.walkInPhone ?? null,
+    customerAddress: doc.partySnapshot?.address ?? null,
+    customerBin: doc.partySnapshot?.bin ?? null,
     locationId: String(doc.locationId),
     posSessionId: doc.posSessionId ? String(doc.posSessionId) : null,
     invoiceDate: doc.invoiceDate.toISOString(),
@@ -228,12 +240,15 @@ export function toInvoicePayload(doc: InvoiceDoc): InvoicePayload {
       discountMinor: l.discountMinor,
       lineTotalMinor: l.lineTotalMinor,
       priceOverridden: l.priceOverridden,
+      qtyReturnedBase: l.qtyReturnedBase ?? 0,
+      returnedSerials: l.returnedSerials ?? [],
     })),
     subtotalMinor: doc.subtotalMinor,
     discountMinor: doc.discountMinor,
     taxMinor: doc.taxMinor,
     grandTotalMinor: doc.grandTotalMinor,
     paidMinor: doc.paidMinor,
+    creditedMinor: doc.creditedMinor ?? 0,
     balanceMinor: doc.balanceMinor,
     paymentStatus: doc.paymentStatus,
     postedAt: doc.postedAt ? doc.postedAt.toISOString() : null,

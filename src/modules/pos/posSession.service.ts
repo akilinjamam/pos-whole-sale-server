@@ -7,6 +7,7 @@ import { assertLocationAllowed } from '../../middleware/requireLocation.js';
 import { Invoice } from '../invoice/invoice.model.js';
 import { Location } from '../location/location.model.js';
 import { PaymentDoc } from '../payment/paymentDoc.model.js';
+import { SalesReturn } from '../salesReturn/salesReturn.model.js';
 import { User } from '../user/user.model.js';
 
 import { PosSession } from './posSession.model.js';
@@ -33,7 +34,7 @@ async function sessionFigures(
   orgId: Types.ObjectId,
   sessionId: Types.ObjectId,
 ): Promise<{ totals: Totals; cashInMinor: number; cashOutMinor: number }> {
-  const [sales, methods] = await Promise.all([
+  const [sales, methods, returns] = await Promise.all([
     Invoice.aggregate<{ n: number; gross: number; discount: number; net: number }>([
       { $match: { orgId, posSessionId: sessionId, status: 'POSTED' } },
       {
@@ -55,6 +56,10 @@ async function sessionFigures(
         },
       },
     ]),
+    SalesReturn.aggregate<{ n: number; total: number }>([
+      { $match: { orgId, posSessionId: sessionId, status: 'POSTED' } },
+      { $group: { _id: null, n: { $sum: 1 }, total: { $sum: '$grandTotalMinor' } } },
+    ]),
   ]);
 
   const byMethod = new Map<string, number>();
@@ -70,15 +75,18 @@ async function sessionFigures(
   }
 
   const s = sales[0];
+  const r = returns[0];
   return {
     totals: {
       salesCount: s?.n ?? 0,
       grossMinor: s?.gross ?? 0,
       discountMinor: s?.discount ?? 0,
-      // Counter returns arrive on Day 20; until then there are none to net off.
-      returnsMinor: 0,
-      netMinor: s?.net ?? 0,
+      returnsMinor: r?.total ?? 0,
+      returnsCount: r?.n ?? 0,
+      netMinor: (s?.net ?? 0) - (r?.total ?? 0),
       byMethod: [...byMethod].map(([method, amountMinor]) => ({ method, amountMinor })),
+      cashInMinor,
+      cashOutMinor,
     },
     cashInMinor,
     cashOutMinor,
@@ -86,9 +94,10 @@ async function sessionFigures(
 }
 
 async function toPayload(doc: PosSessionDoc): Promise<PosSessionPayload> {
-  const [location, user] = await Promise.all([
+  const [location, user, closer] = await Promise.all([
     Location.findById(doc.locationId).select('name').lean(),
     User.findById(doc.openedByUserId).select('name').lean(),
+    doc.closedByUserId ? User.findById(doc.closedByUserId).select('name').lean() : null,
   ]);
 
   // An open session's figures are live; a closed one's were frozen at close.
@@ -115,6 +124,8 @@ async function toPayload(doc: PosSessionDoc): Promise<PosSessionPayload> {
     countedCashMinor: doc.countedCashMinor,
     varianceMinor: doc.varianceMinor,
     denominations: doc.denominations,
+    closedByName: closer?.name,
+    closeNote: doc.closeNote ?? null,
     totals: totals ?? {
       salesCount: 0,
       grossMinor: 0,

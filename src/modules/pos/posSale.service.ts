@@ -12,12 +12,15 @@ import { postMovements } from '../../services/stock.service.js';
 import { resolveStockLines, trackingFor } from '../../services/stockLines.js';
 import { describeAxes } from '../../shared/variant.js';
 import { Invoice, toInvoicePayload } from '../invoice/invoice.model.js';
+import { Location } from '../location/location.model.js';
 import { Org } from '../org/org.model.js';
 import { Party } from '../party/party.model.js';
 import { PaymentDoc } from '../payment/paymentDoc.model.js';
 import { resolveForRequest } from '../pricing/pricing.service.js';
 import { Product } from '../product/product.model.js';
+import { SalesReturn } from '../salesReturn/salesReturn.model.js';
 import { StockBalance } from '../stock/stockBalance.model.js';
+import { User } from '../user/user.model.js';
 import { Variant } from '../variant/variant.model.js';
 
 import { HeldSale } from './heldSale.model.js';
@@ -29,7 +32,7 @@ import type { RequestActor } from '../../lib/requestUser.js';
 import type { MovementInput } from '../../services/stock.service.js';
 import type { StockDocLineDoc } from '../stock/stockDocLine.js';
 import type { PosSaleInput } from '@shared/pos.js';
-import type { PosQuote, PosSaleResult } from '@shared/types.js';
+import type { InvoicePayload, PosQuote, PosSaleResult } from '@shared/types.js';
 
 /**
  * `POST /pos/sales` — the counter sale, §9. **One endpoint, one transaction:**
@@ -59,13 +62,29 @@ export interface PostSaleOptions {
 const refuse = (path: string, message: string) =>
   ApiError.validation('Validation failed', [{ path, message }]);
 
+/** An invoice with the names a printed receipt shows — the counter and the cashier. */
+export async function invoicePayload(doc: InvoiceDoc): Promise<InvoicePayload> {
+  const [location, user] = await Promise.all([
+    Location.findById(doc.locationId).select('name').lean(),
+    doc.salespersonUserId ? User.findById(doc.salespersonUserId).select('name').lean() : null,
+  ]);
+  return {
+    ...toInvoicePayload(doc),
+    locationName: location?.name,
+    salespersonName: user?.name,
+  };
+}
+
 async function replay(actor: RequestActor, invoice: InvoiceDoc): Promise<PosSaleResult> {
   const payments = await PaymentDoc.find({
     orgId: actor.orgId,
+    direction: 'IN',
     'allocations.invoiceId': invoice._id,
-  }).lean();
+  })
+    .sort({ docNo: 1 })
+    .lean();
   return {
-    invoice: toInvoicePayload(invoice),
+    invoice: await invoicePayload(invoice),
     payments: payments.map(paymentPayload),
     changeMinor: 0,
     replayed: true,
@@ -252,6 +271,30 @@ export async function postPosSale(
         'Not needed — the other payments already cover the total',
       );
   });
+  // Exchange credit: each must be an unspent exchange return, spent whole.
+  const exchangeIds = new Set<string>();
+  for (const [i, t] of input.tenders.entries()) {
+    if (t.method !== 'EXCHANGE') continue;
+    if (exchangeIds.has(t.returnId!))
+      throw refuse(`tenders.${i}.returnId`, 'This exchange credit is already applied');
+    exchangeIds.add(t.returnId!);
+    const ret = await SalesReturn.findOne({ _id: t.returnId, orgId: actor.orgId })
+      .select('docNo settlement replacementInvoiceId replacementDocNo grandTotalMinor')
+      .lean();
+    if (!ret || ret.settlement !== 'REPLACEMENT')
+      throw refuse(`tenders.${i}.returnId`, 'No such exchange credit');
+    if (ret.replacementInvoiceId)
+      throw refuse(
+        `tenders.${i}.returnId`,
+        `${ret.docNo} was already spent on ${ret.replacementDocNo}`,
+      );
+    if (ret.grandTotalMinor !== t.amountMinor)
+      throw refuse(
+        `tenders.${i}.amountMinor`,
+        `${ret.docNo} is worth ${ret.grandTotalMinor} — it is spent whole`,
+      );
+  }
+
   const unpaidMinor = totals.totalMinor - paidMinor;
   if (input.paymentMode === 'CASH' && unpaidMinor > 0) {
     throw refuse('tenders', `Short by ${unpaidMinor} — a cash sale is paid in full`);
@@ -312,6 +355,8 @@ export async function postPosSale(
           costAtSaleMinor: costOf(l),
           priceOverridden: priced[i]!.overridden,
           originalPriceMinor: priced[i]!.overridden ? priced[i]!.resolvedMinor : null,
+          qtyReturnedBase: 0,
+          returnedSerials: [],
         };
       });
 
@@ -406,7 +451,8 @@ export async function postPosSale(
               locationId,
               posSessionId: session._id,
               paidAt: now,
-              method: t.method,
+              // An exchange moves value from a return to this sale — no money changes hands.
+              method: t.method === 'EXCHANGE' ? 'ADJUSTMENT' : t.method,
               amountMinor,
               allocatedMinor: amountMinor,
               unallocatedMinor: 0,
@@ -429,7 +475,10 @@ export async function postPosSale(
                   }
                 : null,
               collectedByUserId: actor.actorId,
-              narration: t.reference ?? null,
+              narration:
+                t.method === 'EXCHANGE'
+                  ? `Exchange credit ${t.returnId}`
+                  : (t.reference ?? null),
               createdBy: actor.actorId,
               updatedBy: actor.actorId,
             },
@@ -437,6 +486,26 @@ export async function postPosSale(
           { session: txn },
         );
         paymentIds.push(pay!._id);
+
+        if (t.method === 'EXCHANGE') {
+          // Spend the credit — conditionally, so two sales cannot both spend one return.
+          const spent = await SalesReturn.updateOne(
+            {
+              _id: t.returnId,
+              orgId: actor.orgId,
+              settlement: 'REPLACEMENT',
+              replacementInvoiceId: null,
+            },
+            { $set: { replacementInvoiceId: invoiceId, replacementDocNo: docNo } },
+            { session: txn },
+          );
+          if (spent.modifiedCount !== 1) {
+            throw ApiError.conflict(
+              'ILLEGAL_TRANSITION',
+              'That exchange credit has just been used',
+            );
+          }
+        }
       }
 
       // Credit: the dealer's account takes the invoice, less what was paid now — checked against
@@ -526,7 +595,7 @@ export async function postPosSale(
       .lean(),
   ]);
   return {
-    invoice: toInvoicePayload(invoice!),
+    invoice: await invoicePayload(invoice!),
     payments: payments.map(paymentPayload),
     changeMinor,
     replayed: false,

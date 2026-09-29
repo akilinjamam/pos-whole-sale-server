@@ -282,6 +282,7 @@ export const DOC_SERIES = [
   'RCPT', // receipt (money in)
   'PAY', // payment (money out)
   'CN', // credit note
+  'SR', // sales return
   'DN', // debit note
   'ADJ', // stock adjustment
   'TRF', // stock transfer

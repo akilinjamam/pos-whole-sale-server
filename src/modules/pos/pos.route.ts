@@ -10,6 +10,7 @@ import { requirePermission } from '../../middleware/requirePermission.js';
 import { validate } from '../../middleware/validate.js';
 import {
   closeSessionSchema,
+  counterReturnSchema,
   holdSaleSchema,
   openSessionSchema,
   posQuoteSchema,
@@ -17,11 +18,13 @@ import {
 } from '../../shared/pos.js';
 
 import * as held from './heldSale.service.js';
+import * as returns from './posReturn.service.js';
 import * as sales from './posSale.service.js';
 import * as sessions from './posSession.service.js';
 
 import type {
   CloseSessionInput,
+  CounterReturnInput,
   HoldSaleInput,
   OpenSessionInput,
   PosQuoteInput,
@@ -138,6 +141,77 @@ router.get(
   validate({ params: id }),
   asyncHandler(async (req, res) =>
     sendData(res, await sales.getPosSale(requestActorOf(req), idOf(req))),
+  ),
+);
+
+// ── Returns (Day 20) ──
+const listReturns = returns.listReturnsQuerySchema.extend({
+  posSessionId: z
+    .string()
+    .regex(/^[0-9a-fA-F]{24}$/)
+    .optional(),
+  openExchange: z
+    .enum(['true', 'false'])
+    .transform((v) => v === 'true')
+    .optional(),
+});
+router.get(
+  '/returns/invoice',
+  authenticate,
+  requirePermission('pos:return'),
+  validate({ query: z.object({ docNo: z.string().trim().min(1).max(40) }) }),
+  asyncHandler(async (req, res) =>
+    sendData(
+      res,
+      await returns.getReturnableInvoice(requestActorOf(req), {
+        docNo: String(req.query.docNo),
+      }),
+    ),
+  ),
+);
+router.post(
+  '/returns',
+  authenticate,
+  requirePermission('pos:return'),
+  validate({ body: counterReturnSchema }),
+  asyncHandler(async (req, res) => {
+    const result = await returns.postCounterReturn(
+      requestActorOf(req),
+      req.body as CounterReturnInput,
+    );
+    if (result.replayed) sendData(res, result);
+    else sendCreated(res, result);
+  }),
+);
+router.get(
+  '/returns',
+  authenticate,
+  requirePermission('pos:return'),
+  validate({ query: listReturns }),
+  asyncHandler(async (req, res) => {
+    const { items, meta } = await returns.listReturns(
+      requestActorOf(req),
+      req.query as unknown as z.infer<typeof listReturns>,
+    );
+    sendPage(res, items, meta);
+  }),
+);
+router.get(
+  '/returns/:id',
+  authenticate,
+  requirePermission('pos:return'),
+  validate({ params: id }),
+  asyncHandler(async (req, res) =>
+    sendData(res, await returns.getReturn(requestActorOf(req), idOf(req))),
+  ),
+);
+router.post(
+  '/returns/:id/refund',
+  authenticate,
+  requirePermission('pos:return'),
+  validate({ params: id }),
+  asyncHandler(async (req, res) =>
+    sendData(res, await returns.refundExchangeCredit(requestActorOf(req), idOf(req))),
   ),
 );
 

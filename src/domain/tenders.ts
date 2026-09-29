@@ -1,7 +1,7 @@
 /**
  * Splitting a counter payment across tenders — pure, so the change arithmetic is a unit test.
  *
- * Only cash gives change. Card, mobile money and bank tenders are applied exactly; cash covers
+ * Only cash gives change. Card, mobile money, bank and exchange tenders are applied exactly; cash covers
  * whatever they leave, and anything above that is change handed back — never recorded as money
  * received, so the drawer's expected cash is what actually stayed in it.
  */
@@ -29,7 +29,7 @@ export function applyTenders(
     .reduce((s, t) => s + t.amountMinor, 0);
   if (nonCash > totalMinor) {
     throw new TenderError(
-      'Card, mobile and bank payments cannot exceed the total — only cash gives change',
+      'Card, mobile, bank and exchange payments cannot exceed the total — only cash gives change',
     );
   }
   let cashRoom = totalMinor - nonCash;

@@ -917,7 +917,13 @@ export interface PosSessionPayload {
     returnsMinor: number;
     netMinor: number;
     byMethod: { method: string; amountMinor: number }[];
+    /** Day 20 — the Z-report's drawer lines. Absent on shifts closed before Day 20. */
+    returnsCount?: number;
+    cashInMinor?: number;
+    cashOutMinor?: number;
   };
+  closedByName?: string;
+  closeNote?: string | null;
 }
 
 export interface InvoiceLinePayload {
@@ -934,6 +940,9 @@ export interface InvoiceLinePayload {
   discountMinor: number;
   lineTotalMinor: number;
   priceOverridden: boolean;
+  /** Counter returns against this line so far (Day 20). */
+  qtyReturnedBase: number;
+  returnedSerials: string[];
 }
 
 export interface InvoicePayload {
@@ -945,7 +954,13 @@ export interface InvoicePayload {
   partyId: string | null;
   customerName: string | null;
   walkInPhone: string | null;
+  /** From the party snapshot — for the A4 invoice. */
+  customerPhone: string | null;
+  customerAddress: string | null;
+  customerBin: string | null;
   locationId: string;
+  locationName?: string;
+  salespersonName?: string;
   posSessionId: string | null;
   invoiceDate: string;
   dueDate: string | null;
@@ -955,6 +970,7 @@ export interface InvoicePayload {
   taxMinor: number;
   grandTotalMinor: number;
   paidMinor: number;
+  creditedMinor: number;
   balanceMinor: number;
   paymentStatus: 'UNPAID' | 'PARTIAL' | 'PAID' | 'OVERPAID';
   postedAt: string | null;
@@ -1024,4 +1040,58 @@ export interface PosQuote {
   discountMinor: number;
   totalMinor: number;
   customer: { id: string; name: string; isDealer: boolean; balanceMinor: number } | null;
+}
+
+// ─── Counter returns (Day 20) ───────────────────────────────────────────────────────────
+
+export interface SalesReturnLinePayload {
+  invoiceLineId: string;
+  productId: string;
+  variantId: string | null;
+  description: string;
+  serials: string[];
+  qtyBase: number;
+  unitPriceMinor: number;
+  lineTotalMinor: number;
+  condition: 'GOOD' | 'DAMAGED';
+}
+
+export interface SalesReturnPayload {
+  id: string;
+  docNo: string;
+  channel: 'WHOLESALE' | 'COUNTER';
+  invoiceId: string;
+  invoiceDocNo: string;
+  partyId: string | null;
+  customerName: string | null;
+  locationId: string;
+  posSessionId: string | null;
+  returnDate: string;
+  reason: 'DAMAGED' | 'WRONG_ITEM' | 'NOT_SOLD' | 'WARRANTY' | 'OTHER';
+  settlement: 'CREDIT_NOTE' | 'CASH_REFUND' | 'REPLACEMENT';
+  lines: SalesReturnLinePayload[];
+  grandTotalMinor: number;
+  creditNoteDocNo: string | null;
+  refundDocNo: string | null;
+  /** For an exchange: the sale that spent the credit, once one has. */
+  replacementInvoiceId: string | null;
+  replacementDocNo: string | null;
+  note: string | null;
+  postedAt: string;
+}
+
+/** An invoice as the returns screen sees it: what can still come back, and how it can settle. */
+export interface ReturnableInvoice {
+  invoice: InvoicePayload;
+  /** Per invoice line, in the same order: base units still returnable, and serials still out. */
+  returnable: {
+    invoiceLineId: string;
+    qtyBase: number;
+    serials: string[];
+    trackingMode: 'NONE' | 'LOT' | 'SERIAL';
+    baseUom: string;
+  }[];
+  /** CREDIT_NOTE only when the sale went on a dealer's account; REPLACEMENT only when it did not. */
+  settlements: ('CASH_REFUND' | 'REPLACEMENT' | 'CREDIT_NOTE')[];
+  previousReturns: SalesReturnPayload[];
 }

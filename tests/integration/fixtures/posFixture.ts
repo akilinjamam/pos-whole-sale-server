@@ -26,7 +26,10 @@ export interface PosFixture {
   dealerId: string;
 }
 
-export function actorFor(f: Pick<PosFixture, 'orgId' | 'userId'>, permissions: readonly Permission[] = ALL_PERMISSIONS): RequestActor {
+export function actorFor(
+  f: Pick<PosFixture, 'orgId' | 'userId'>,
+  permissions: readonly Permission[] = ALL_PERMISSIONS,
+): RequestActor {
   return {
     orgId: f.orgId,
     actorId: f.userId,
@@ -54,9 +57,19 @@ export async function createPosFixture(): Promise<PosFixture> {
     currency: 'BDT',
     timeZone: 'Asia/Dhaka',
     fiscalYearStartMonth: 7,
-    settings: { enforceCreditLimit: true, defaultRetailTierId: null, defaultPaymentTermsDays: 30 },
+    settings: {
+      enforceCreditLimit: true,
+      defaultRetailTierId: null,
+      defaultPaymentTermsDays: 30,
+    },
   });
-  const location = await Location.create({ orgId, code: 'ZZCTR', name: 'ZZTEST Counter', type: 'COUNTER', allowsSales: true });
+  const location = await Location.create({
+    orgId,
+    code: 'ZZCTR',
+    name: 'ZZTEST Counter',
+    type: 'COUNTER',
+    allowsSales: true,
+  });
   const actor = actorFor({ orgId, userId });
 
   const frame = await createProduct(
@@ -87,10 +100,14 @@ export async function createPosFixture(): Promise<PosFixture> {
     userId,
     true,
   );
-  const dealer = await createParty({ orgId, actorId: userId, permissions: ALL_PERMISSIONS }, 'DEALER', {
-    name: 'ZZTEST Rahman Optics',
-    dealer: { creditLimitMinor: 20_000_000, paymentTermsDays: 30 },
-  });
+  const dealer = await createParty(
+    { orgId, actorId: userId, permissions: ALL_PERMISSIONS },
+    'DEALER',
+    {
+      name: 'ZZTEST Rahman Optics',
+      dealer: { creditLimitMinor: 20_000_000, paymentTermsDays: 30 },
+    },
+  );
 
   await withTransaction((session) =>
     postMovements(session, {
@@ -98,13 +115,36 @@ export async function createPosFixture(): Promise<PosFixture> {
       postedAt: new Date(),
       actorId: userId,
       movements: [
-        { locationId: location._id, productId: new Types.ObjectId(frame.id), variantId: null, qtyBase: 60, movementType: 'OPENING', refType: 'ZZTEST', unitCostMinor: 3_000 },
-        { locationId: location._id, productId: new Types.ObjectId(machine.id), variantId: null, qtyBase: 2, movementType: 'OPENING', refType: 'ZZTEST', serials: ['ZZSN-1', 'ZZSN-2'] },
+        {
+          locationId: location._id,
+          productId: new Types.ObjectId(frame.id),
+          variantId: null,
+          qtyBase: 60,
+          movementType: 'OPENING',
+          refType: 'ZZTEST',
+          unitCostMinor: 3_000,
+        },
+        {
+          locationId: location._id,
+          productId: new Types.ObjectId(machine.id),
+          variantId: null,
+          qtyBase: 2,
+          movementType: 'OPENING',
+          refType: 'ZZTEST',
+          serials: ['ZZSN-1', 'ZZSN-2'],
+        },
       ],
     }),
   );
 
-  return { orgId, locationId: location._id, userId, frameId: frame.id, machineId: machine.id, dealerId: dealer.id };
+  return {
+    orgId,
+    locationId: location._id,
+    userId,
+    frameId: frame.id,
+    machineId: machine.id,
+    dealerId: dealer.id,
+  };
 }
 
 /** Delete every document carrying this org id, in every collection — via the driver, since the
@@ -117,5 +157,7 @@ export async function cleanupOrg(orgId: Types.ObjectId): Promise<void> {
     await db.collection(name).deleteMany({ orgId });
   }
   await db.collection('orgs').deleteOne({ _id: orgId });
-  await db.collection('counters').deleteMany({ _id: { $regex: `^${String(orgId)}:` } } as never);
+  await db
+    .collection('counters')
+    .deleteMany({ _id: { $regex: `^${String(orgId)}:` } } as never);
 }

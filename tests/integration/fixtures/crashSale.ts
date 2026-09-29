@@ -12,15 +12,23 @@ import { postPosSale } from '../../../src/modules/pos/posSale.service.js';
 
 import { actorFor } from './posFixture.js';
 
-const raw = JSON.parse(process.env.FIXTURE ?? '{}') as { orgId: string; userId: string; input: never };
+const raw = JSON.parse(process.env.FIXTURE ?? '{}') as {
+  orgId: string;
+  userId: string;
+  input: never;
+};
 
 await connectDatabase();
-await postPosSale(actorFor({ orgId: new Types.ObjectId(raw.orgId), userId: new Types.ObjectId(raw.userId) }), raw.input, {
-  beforeCommit: () => {
-    // Everything has been written inside the transaction; nothing is committed. Die now.
-    process.stdout.write('WRITES-DONE\n');
-    process.exit(137);
+await postPosSale(
+  actorFor({ orgId: new Types.ObjectId(raw.orgId), userId: new Types.ObjectId(raw.userId) }),
+  raw.input,
+  {
+    beforeCommit: () => {
+      // Everything has been written inside the transaction; nothing is committed. Die now.
+      process.stdout.write('WRITES-DONE\n');
+      process.exit(137);
+    },
   },
-});
+);
 process.stdout.write('COMMITTED — the crash hook never fired\n');
 process.exit(0);
