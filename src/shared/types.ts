@@ -18,7 +18,11 @@ import type {
   SerialStatus,
   WarrantyState,
   AdjustmentReason,
+  BillingStatus,
   CountStatus,
+  CreditCheckStatus,
+  FulfillmentStatus,
+  OrderStatus,
   DocumentStatus,
   TransferStatus,
   TrackingMode,
@@ -1094,4 +1098,92 @@ export interface ReturnableInvoice {
   /** CREDIT_NOTE only when the sale went on a dealer's account; REPLACEMENT only when it did not. */
   settlements: ('CASH_REFUND' | 'REPLACEMENT' | 'CREDIT_NOTE')[];
   previousReturns: SalesReturnPayload[];
+}
+
+// ─── Wholesale orders (Day 21) ──────────────────────────────────────────────────────────
+
+export interface OrderLinePayload {
+  id: string;
+  lineNo: number;
+  productId: string;
+  variantId: string | null;
+  productName?: string;
+  sku?: string;
+  uomCode: string;
+  uomQty: number;
+  /** The five counters (§7), all in base units. */
+  qtyBase: number;
+  qtyReservedBase: number;
+  qtyDispatchedBase: number;
+  qtyInvoicedBase: number;
+  qtyReturnedBase: number;
+  qtyCancelledBase: number;
+  /** qtyBase − dispatched − cancelled. */
+  qtyOutstandingBase: number;
+  unitPriceMinor: number;
+  priceOverridden: boolean;
+  originalPriceMinor: number | null;
+  discountPct: number;
+  discountMinor: number;
+  taxPct: number;
+  taxMinor: number;
+  lineTotalMinor: number;
+}
+
+export interface OrderStatusHistoryPayload {
+  /** Null for the creation entry. */
+  from: OrderStatus | null;
+  to: OrderStatus;
+  action: string;
+  at: string;
+  byUserId: string | null;
+  reason: string | null;
+}
+
+export interface OrderCreditCheckPayload {
+  status: CreditCheckStatus;
+  checkedAt: string;
+  outstandingMinor: number;
+  exposureMinor: number;
+  limitMinor: number;
+  overriddenByUserId: string | null;
+  overrideReason: string | null;
+}
+
+export interface WholesaleOrderPayload {
+  id: string;
+  /** Null while a draft — the number is allocated on confirm. */
+  docNo: string | null;
+  dealerPartyId: string;
+  dealerName?: string;
+  priceTierId: string | null;
+  locationId: string;
+  locationName?: string;
+  salespersonUserId: string | null;
+  orderDate: string;
+  requiredDate: string | null;
+  status: OrderStatus;
+  fulfillmentStatus: FulfillmentStatus;
+  billingStatus: BillingStatus;
+  lines: OrderLinePayload[];
+  subtotalMinor: number;
+  orderDiscountMinor: number;
+  taxMinor: number;
+  shippingMinor: number;
+  roundingMinor: number;
+  grandTotalMinor: number;
+  creditCheck: OrderCreditCheckPayload | null;
+  shippingAddress: string | null;
+  billingAddress: string | null;
+  paymentTermsDays: number;
+  note: string | null;
+  statusHistory: OrderStatusHistoryPayload[];
+  /** What the caller may do to this order now, from the state machine — the screen's buttons. */
+  availableActions: { action: string; to: OrderStatus; requiresReason: boolean }[];
+  confirmedAt: string | null;
+  cancelledAt: string | null;
+  cancelReason: string | null;
+  closedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
 }

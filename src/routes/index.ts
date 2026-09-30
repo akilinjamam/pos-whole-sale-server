@@ -23,6 +23,7 @@ import stockCountRouter from '../modules/stockCount/stockCount.route.js';
 import stockTransferRouter from '../modules/stockTransfer/stockTransfer.route.js';
 import userRouter from '../modules/user/user.route.js';
 import variantRouter from '../modules/variant/variant.route.js';
+import wholesaleOrderRouter from '../modules/wholesaleOrder/wholesaleOrder.route.js';
 
 /**
  * The route table. Every module's router is mounted at `/api/v1/<path>` from this array —
@@ -92,7 +93,8 @@ export const allRoutes: RouteEntry[] = [
   // movements (+ ledger on credit), written by one endpoint in one transaction.
   { path: 'pos', route: posRouter },
 
-  // Day 19 onwards: the sale screen (client).
+  // Wholesale orders (Day 21). Status moves only through `domain/orderStateMachine.ts`.
+  { path: 'orders', route: wholesaleOrderRouter },
 ];
 
 /** Paths that skip authentication, as full mount prefixes. */
