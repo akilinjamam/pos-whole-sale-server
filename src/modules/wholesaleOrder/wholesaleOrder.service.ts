@@ -7,12 +7,25 @@ import {
   orderTotals,
 } from '../../domain/orderQuantities.js';
 import { ApiError } from '../../lib/ApiError.js';
+import { nextDocNo } from '../../lib/numbering.js';
 import { paginate } from '../../lib/paginate.js';
+import { dayIn, dayToDate } from '../../lib/period.js';
+import { withTransaction } from '../../lib/withTransaction.js';
 import { locationScopeOf } from '../../middleware/requireLocation.js';
+import { releaseReservation, reserveStock } from '../../services/stock.service.js';
 import { Location } from '../location/location.model.js';
+import { Org } from '../org/org.model.js';
 import { Party } from '../party/party.model.js';
 import { Product } from '../product/product.model.js';
 
+import {
+  creditPosition,
+  linesAsInput,
+  priceOrder,
+  quote,
+  specOf,
+  toOrderLines,
+} from './orderPricing.js';
 import {
   TRANSITION_WRITE,
   WholesaleOrder,
@@ -20,15 +33,30 @@ import {
   updateTouchesStatus,
 } from './wholesaleOrder.model.js';
 
+import type { PricedOrder, PriceOrderInput } from './orderPricing.js';
 import type { ListOrdersQuery } from './wholesaleOrder.schema.js';
-import type { OrderStatusHistoryDoc, WholesaleOrderDoc } from './wholesaleOrder.model.js';
+import type {
+  OrderCreditCheckDoc,
+  OrderLineDoc,
+  OrderStatusHistoryDoc,
+  WholesaleOrderDoc,
+} from './wholesaleOrder.model.js';
+import type { PartyDoc } from '../party/party.model.js';
+import type {
+  CancelOrderInput,
+  ConfirmOrderInput,
+  CreateOrderInput,
+  OrderReasonInput,
+  QuoteOrderInput,
+  UpdateOrderInput,
+} from '@shared/orders.js';
 import type {
   OrderTransitionContext,
   TransitionVerdict,
 } from '../../domain/orderStateMachine.js';
 import type { RequestActor } from '../../lib/requestUser.js';
 import type { OrderStatus } from '@shared/enums.js';
-import type { PageMeta, WholesaleOrderPayload } from '@shared/types.js';
+import type { OrderQuote, PageMeta, WholesaleOrderPayload } from '@shared/types.js';
 import type { ClientSession, FilterQuery, UpdateQuery } from 'mongoose';
 
 // ─── Transitions ────────────────────────────────────────────────────────────────────────
@@ -48,6 +76,25 @@ export function transitionContextOf(
     creditCheck: order.creditCheck?.status ?? null,
     reason: reason ?? null,
   };
+}
+
+/**
+ * The context for *offering* actions — the order screen's buttons — as opposed to taking one.
+ *
+ * Confirm and approve settle the credit check themselves before they transition: confirm runs it,
+ * approve overrides it. Judged on the stored check, a draft (never checked) would offer no Confirm
+ * and a pending order (BLOCKED) no Approve. So for the offer the check is taken as the action will
+ * leave it; the endpoint then decides the real outcome, and the transition itself is still guarded
+ * on the stored value. `submitForApproval` is never offered — it is an outcome of confirm.
+ */
+function offerContextOf(
+  order: Pick<WholesaleOrderDoc, 'lines' | 'creditCheck' | 'status'>,
+  actor: RequestActor,
+): OrderTransitionContext {
+  const ctx = transitionContextOf(order, actor);
+  if (order.status === 'DRAFT') return { ...ctx, creditCheck: 'OK' };
+  if (order.status === 'PENDING_APPROVAL') return { ...ctx, creditCheck: 'OVERRIDDEN' };
+  return ctx;
 }
 
 function refusalToError(verdict: Extract<TransitionVerdict, { ok: false }>): ApiError {
@@ -185,7 +232,7 @@ async function serialize(
 
   return docs.map((d) =>
     toWholesaleOrderPayload(d, {
-      availableActions: availableActions(d.status, transitionContextOf(d, actor)),
+      availableActions: availableActions(d.status, offerContextOf(d, actor)),
       dealerName: dealerName.get(String(d.dealerPartyId)),
       locationName: locationName.get(String(d.locationId)),
       product: (id) => product.get(String(id)),
@@ -227,5 +274,441 @@ export async function getOrder(
   if (!doc) throw ApiError.notFound('Order');
   assertCanSee(actor, doc);
   const [payload] = await serialize(actor, [doc]);
+  return payload!;
+}
+
+// ─── Drafts (Day 22) ────────────────────────────────────────────────────────────────────
+//
+// A draft is freely editable and has no number. Every save re-prices every line through the
+// pricing engine and recomputes the totals — the client sends quantities, never money.
+
+const refuse = (path: string, message: string) =>
+  ApiError.validation('Validation failed', [{ path, message }]);
+
+function assertNotOnHold(dealer: PartyDoc): void {
+  if (dealer.dealer?.creditHold) {
+    throw ApiError.conflict(
+      'CREDIT_LIMIT_EXCEEDED',
+      `${dealer.name} is on credit hold${dealer.dealer.creditHoldReason ? `: ${dealer.dealer.creditHoldReason}` : ''} — no new orders`,
+      { dealerPartyId: String(dealer._id) },
+    );
+  }
+}
+
+/** One of the dealer's addresses as a printable line: the one asked for, else the default. */
+function addressOf(
+  dealer: PartyDoc,
+  id: string | null | undefined,
+  kind: 'isDefaultShipping' | 'isDefaultBilling',
+  path: string,
+): string | null {
+  const a = id
+    ? dealer.addresses.find((x) => String(x._id) === id)
+    : (dealer.addresses.find((x) => x[kind]) ?? dealer.addresses[0]);
+  if (id && !a) throw refuse(path, `Not one of ${dealer.name}'s addresses`);
+  if (!a) return null;
+  return [a.line1, a.line2, a.city, a.district].filter(Boolean).join(', ');
+}
+
+/** The header and lines a priced draft stores — shared by create and update. */
+function pricedFields(priced: PricedOrder, previousLines: readonly OrderLineDoc[] = []) {
+  return {
+    dealerPartyId: priced.dealer._id,
+    priceTierId: priced.dealer.dealer?.priceTierId ?? null,
+    locationId: priced.locationId,
+    lines: toOrderLines(priced.lines, previousLines),
+    subtotalMinor: priced.subtotalMinor,
+    orderDiscount: priced.orderDiscount
+      ? {
+          kind: priced.orderDiscount.kind,
+          amountMinor:
+            priced.orderDiscount.kind === 'AMOUNT' ? priced.orderDiscount.amountMinor : 0,
+          pct: priced.orderDiscount.kind === 'PCT' ? priced.orderDiscount.pct : 0,
+        }
+      : null,
+    orderDiscountMinor: priced.orderDiscountMinor,
+    taxMinor: priced.taxMinor,
+    shippingMinor: priced.shippingMinor,
+    roundingMinor: priced.roundingMinor,
+    grandTotalMinor: priced.grandTotalMinor,
+  };
+}
+
+async function loadForWrite(
+  actor: RequestActor,
+  id: Types.ObjectId,
+): Promise<WholesaleOrderDoc> {
+  const doc = await WholesaleOrder.findOne({
+    _id: id,
+    orgId: actor.orgId,
+    isDeleted: false,
+  }).lean();
+  if (!doc) throw ApiError.notFound('Order');
+  assertCanSee(actor, doc);
+  return doc;
+}
+
+const onlyDraft = (doc: WholesaleOrderDoc, verb: string) =>
+  ApiError.conflict(
+    'ILLEGAL_TRANSITION',
+    `${doc.docNo ?? 'This order'} is ${doc.status} — only a draft can be ${verb}`,
+  );
+
+export async function createOrder(
+  actor: RequestActor,
+  input: CreateOrderInput,
+): Promise<WholesaleOrderPayload> {
+  const priced = await priceOrder(actor, input);
+  assertNotOnHold(priced.dealer);
+  const org = await Org.findById(actor.orgId)
+    .select('timeZone settings.defaultPaymentTermsDays')
+    .lean();
+
+  const doc = await WholesaleOrder.create({
+    orgId: actor.orgId,
+    ...pricedFields(priced),
+    salespersonUserId: priced.dealer.dealer?.salespersonUserId ?? actor.actorId,
+    orderDate: dayToDate(input.orderDate ?? dayIn(new Date(), org?.timeZone ?? 'Asia/Dhaka')),
+    requiredDate: dayToDate(input.requiredDate),
+    shippingAddress: addressOf(
+      priced.dealer,
+      input.shippingAddressId,
+      'isDefaultShipping',
+      'shippingAddressId',
+    ),
+    billingAddress: addressOf(
+      priced.dealer,
+      input.billingAddressId,
+      'isDefaultBilling',
+      'billingAddressId',
+    ),
+    paymentTermsDays:
+      input.paymentTermsDays ??
+      priced.dealer.dealer?.paymentTermsDays ??
+      org?.settings?.defaultPaymentTermsDays ??
+      0,
+    note: input.note ?? null,
+    createdBy: actor.actorId,
+    updatedBy: actor.actorId,
+  });
+  const [payload] = await serialize(actor, [doc.toObject()]);
+  return payload!;
+}
+
+export async function updateOrder(
+  actor: RequestActor,
+  id: Types.ObjectId,
+  input: UpdateOrderInput,
+): Promise<WholesaleOrderPayload> {
+  const doc = await loadForWrite(actor, id);
+  if (doc.status !== 'DRAFT') throw onlyDraft(doc, 'changed');
+
+  // What was not sent is kept — and still re-priced: yesterday's draft saved today is today's price.
+  const merged: PriceOrderInput = {
+    dealerPartyId: input.dealerPartyId ?? String(doc.dealerPartyId),
+    locationId: input.locationId ?? String(doc.locationId),
+    lines: input.lines ?? linesAsInput(doc.lines),
+    orderDiscount:
+      input.orderDiscount !== undefined ? input.orderDiscount : specOf(doc.orderDiscount),
+    shippingMinor: input.shippingMinor ?? doc.shippingMinor,
+  };
+  const priced = await priceOrder(actor, merged, {
+    previous: { lines: doc.lines, orderDiscount: doc.orderDiscount },
+  });
+  assertNotOnHold(priced.dealer);
+
+  const dealerChanged = !priced.dealer._id.equals(doc.dealerPartyId);
+  const $set: Record<string, unknown> = {
+    ...pricedFields(priced, doc.lines),
+    updatedBy: actor.actorId,
+  };
+  if (dealerChanged || input.shippingAddressId !== undefined) {
+    $set.shippingAddress = addressOf(
+      priced.dealer,
+      input.shippingAddressId,
+      'isDefaultShipping',
+      'shippingAddressId',
+    );
+  }
+  if (dealerChanged || input.billingAddressId !== undefined) {
+    $set.billingAddress = addressOf(
+      priced.dealer,
+      input.billingAddressId,
+      'isDefaultBilling',
+      'billingAddressId',
+    );
+  }
+  if (dealerChanged) {
+    $set.salespersonUserId = priced.dealer.dealer?.salespersonUserId ?? doc.salespersonUserId;
+    if (input.paymentTermsDays === undefined && priced.dealer.dealer) {
+      $set.paymentTermsDays = priced.dealer.dealer.paymentTermsDays;
+    }
+  }
+  if (input.paymentTermsDays !== undefined) $set.paymentTermsDays = input.paymentTermsDays;
+  if (input.orderDate !== undefined) $set.orderDate = dayToDate(input.orderDate);
+  if (input.requiredDate !== undefined) $set.requiredDate = dayToDate(input.requiredDate);
+  if (input.note !== undefined) $set.note = input.note;
+
+  // Conditioned on DRAFT: a confirm that lands between our read and this write wins, and we 409.
+  const updated = await WholesaleOrder.findOneAndUpdate(
+    { _id: doc._id, orgId: actor.orgId, status: 'DRAFT' },
+    { $set },
+    { new: true },
+  ).lean();
+  if (!updated)
+    throw onlyDraft({ ...doc, status: (await loadForWrite(actor, id)).status }, 'changed');
+  const [payload] = await serialize(actor, [updated]);
+  return payload!;
+}
+
+export function quoteOrder(actor: RequestActor, input: QuoteOrderInput): Promise<OrderQuote> {
+  return quote(actor, input);
+}
+
+// ─── Confirm, approve, reject, cancel (Day 22) ──────────────────────────────────────────
+
+/** The stock a set of order lines holds, as reservation lines at the order's location. */
+const reservationsOf = (
+  order: Pick<WholesaleOrderDoc, 'locationId'>,
+  lines: readonly OrderLineDoc[],
+  qty: (l: OrderLineDoc) => number,
+) =>
+  lines
+    .filter((l) => qty(l) > 0)
+    .map((l) => ({
+      locationId: order.locationId,
+      productId: l.productId,
+      variantId: l.variantId ?? null,
+      qtyBase: qty(l),
+    }));
+
+/** Reserve every line in full, number the order, and move it to CONFIRMED — one session. */
+async function reserveAndConfirm(
+  actor: RequestActor,
+  order: WholesaleOrderDoc,
+  lines: OrderLineDoc[],
+  reason: string | null,
+  session: ClientSession,
+): Promise<WholesaleOrderDoc> {
+  const reserved = lines.map((l) => ({ ...l, qtyReservedBase: l.qtyBase }));
+  await reserveStock(session, {
+    orgId: actor.orgId,
+    lines: reservationsOf(order, reserved, (l) => l.qtyBase),
+  });
+  await WholesaleOrder.updateOne(
+    { _id: order._id, orgId: actor.orgId },
+    { $set: { lines: reserved } },
+    { session },
+  );
+  const docNo = await nextDocNo(session, actor.orgId, 'SO', new Date());
+  return transitionOrder(actor, order._id, 'CONFIRMED', { session, reason, set: { docNo } });
+}
+
+/**
+ * `POST /orders/:id/confirm` — in one transaction:
+ *
+ *   re-price → credit check → **reserve stock** (`qtyReserved += qty`, no ledger row) → allocate
+ *   the `SO` number → DRAFT → CONFIRMED
+ *
+ * Refused for stock or credit, it leaves the draft exactly as it was: no reservation, no number
+ * used. The credit check has three outcomes:
+ *   - passes → CONFIRMED;
+ *   - fails, caller holds `order:creditOverride` and gave a reason → CONFIRMED as OVERRIDDEN;
+ *     without a reason → 409 CREDIT_LIMIT_EXCEEDED with `canOverride`, so the UI can ask for one;
+ *   - fails, caller lacks the permission → PENDING_APPROVAL, nothing reserved or numbered yet.
+ * A dealer on hold is refused outright: a hold is a person's decision, not a threshold.
+ */
+export async function confirmOrder(
+  actor: RequestActor,
+  id: Types.ObjectId,
+  input: ConfirmOrderInput,
+): Promise<WholesaleOrderPayload> {
+  const draft = await loadForWrite(actor, id);
+  if (draft.status !== 'DRAFT') throw onlyDraft(draft, 'confirmed');
+  if (draft.lines.length === 0)
+    throw refuse('lines', 'Add at least one line before confirming');
+
+  // Price outside the transaction (reads only); the transaction checks nothing moved meanwhile.
+  const priced = await priceOrder(
+    actor,
+    {
+      dealerPartyId: String(draft.dealerPartyId),
+      locationId: String(draft.locationId),
+      lines: linesAsInput(draft.lines),
+      orderDiscount: specOf(draft.orderDiscount),
+      shippingMinor: draft.shippingMinor,
+    },
+    { trustInput: true },
+  );
+  const overrideReason = input.creditOverrideReason?.trim() || null;
+
+  const result = await withTransaction(async (session) => {
+    const fresh = await WholesaleOrder.findOne({ _id: id, orgId: actor.orgId })
+      .session(session)
+      .lean();
+    if (!fresh || fresh.status !== 'DRAFT') throw onlyDraft(fresh ?? draft, 'confirmed');
+    if (fresh.updatedAt.getTime() !== draft.updatedAt.getTime()) {
+      throw ApiError.conflict(
+        'ILLEGAL_TRANSITION',
+        'The order was edited while it was being confirmed — reload and try again',
+      );
+    }
+
+    // The balance as of this transaction, not as of the pricing read.
+    const dealer = (await Party.findById(fresh.dealerPartyId).session(session).lean())!;
+    const credit = await creditPosition(actor, dealer, priced.grandTotalMinor);
+    if (credit.verdict === 'ON_HOLD') assertNotOnHold(dealer);
+
+    const overriding = credit.verdict !== 'OK' && credit.canOverride;
+    if (overriding && !overrideReason) {
+      throw ApiError.conflict(
+        'CREDIT_LIMIT_EXCEEDED',
+        credit.message ?? 'Over the credit limit',
+        {
+          canOverride: true,
+          exposureAfterMinor: credit.exposureAfterMinor,
+          limitMinor: credit.limitMinor,
+          balanceMinor: credit.balanceMinor,
+        },
+      );
+    }
+    const creditCheck: OrderCreditCheckDoc = {
+      status: credit.verdict === 'OK' ? 'OK' : overriding ? 'OVERRIDDEN' : 'BLOCKED',
+      checkedAt: new Date(),
+      outstandingMinor: credit.balanceMinor,
+      exposureMinor: credit.exposureAfterMinor,
+      limitMinor: credit.limitMinor,
+      overriddenByUserId: overriding ? actor.actorId : null,
+      overrideReason: overriding ? overrideReason : null,
+    };
+
+    const lines = toOrderLines(priced.lines, fresh.lines);
+    await WholesaleOrder.updateOne(
+      { _id: id, orgId: actor.orgId },
+      {
+        $set: {
+          ...pricedFields(priced, fresh.lines),
+          lines,
+          creditCheck,
+          updatedBy: actor.actorId,
+        },
+      },
+      { session },
+    );
+
+    if (creditCheck.status === 'BLOCKED') {
+      return transitionOrder(actor, id, 'PENDING_APPROVAL', {
+        session,
+        reason: overrideReason,
+      });
+    }
+    return reserveAndConfirm(actor, fresh, lines, overrideReason, session);
+  });
+  const [payload] = await serialize(actor, [result]);
+  return payload!;
+}
+
+/**
+ * `POST /orders/:id/approve` — a manager lends past the limit: the credit check is recorded as
+ * OVERRIDDEN with their reason, then the order reserves and confirms exactly as a passing confirm
+ * would. Prices stand as they were when the order was submitted.
+ */
+export async function approveOrder(
+  actor: RequestActor,
+  id: Types.ObjectId,
+  input: OrderReasonInput,
+): Promise<WholesaleOrderPayload> {
+  const result = await withTransaction(async (session) => {
+    const order = await WholesaleOrder.findOne({
+      _id: id,
+      orgId: actor.orgId,
+      isDeleted: false,
+    })
+      .session(session)
+      .lean();
+    if (!order) throw ApiError.notFound('Order');
+    assertCanSee(actor, order);
+    if (order.status !== 'PENDING_APPROVAL') {
+      throw ApiError.conflict(
+        'ILLEGAL_TRANSITION',
+        `This order is ${order.status} — there is nothing to approve`,
+      );
+    }
+    const dealer = (await Party.findById(order.dealerPartyId).session(session).lean())!;
+    assertNotOnHold(dealer);
+
+    await WholesaleOrder.updateOne(
+      { _id: id, orgId: actor.orgId },
+      {
+        $set: {
+          creditCheck: {
+            ...(order.creditCheck ?? {
+              checkedAt: new Date(),
+              outstandingMinor: dealer.currentBalanceMinor,
+              exposureMinor: dealer.currentBalanceMinor + order.grandTotalMinor,
+              limitMinor: dealer.dealer?.creditLimitMinor ?? 0,
+            }),
+            status: 'OVERRIDDEN',
+            overriddenByUserId: actor.actorId,
+            overrideReason: input.reason,
+          },
+          updatedBy: actor.actorId,
+        },
+      },
+      { session },
+    );
+    return reserveAndConfirm(actor, order, order.lines, input.reason, session);
+  });
+  const [payload] = await serialize(actor, [result]);
+  return payload!;
+}
+
+/** `POST /orders/:id/reject` — back to DRAFT for the rep to amend. Nothing was reserved. */
+export async function rejectOrder(
+  actor: RequestActor,
+  id: Types.ObjectId,
+  input: OrderReasonInput,
+): Promise<WholesaleOrderPayload> {
+  const result = await withTransaction((session) =>
+    transitionOrder(actor, id, 'DRAFT', { session, reason: input.reason }),
+  );
+  const [payload] = await serialize(actor, [result]);
+  return payload!;
+}
+
+/**
+ * `POST /orders/:id/cancel` — releases every unit the order still holds, exactly, and cancels it
+ * — one transaction. Refused (by the state machine) once anything has been dispatched: that is a
+ * short close (Day 26).
+ */
+export async function cancelOrder(
+  actor: RequestActor,
+  id: Types.ObjectId,
+  input: CancelOrderInput,
+): Promise<WholesaleOrderPayload> {
+  const result = await withTransaction(async (session) => {
+    const order = await WholesaleOrder.findOne({
+      _id: id,
+      orgId: actor.orgId,
+      isDeleted: false,
+    })
+      .session(session)
+      .lean();
+    if (!order) throw ApiError.notFound('Order');
+    assertCanSee(actor, order);
+
+    const held = reservationsOf(order, order.lines, (l) => l.qtyReservedBase);
+    if (held.length > 0) {
+      await releaseReservation(session, { orgId: actor.orgId, lines: held });
+      await WholesaleOrder.updateOne(
+        { _id: id, orgId: actor.orgId },
+        { $set: { 'lines.$[].qtyReservedBase': 0, updatedBy: actor.actorId } },
+        { session },
+      );
+    }
+    // Last, so a refusal (illegal from this status, no reason) rolls the release back with it.
+    return transitionOrder(actor, id, 'CANCELLED', { session, reason: input.reason ?? null });
+  });
+  const [payload] = await serialize(actor, [result]);
   return payload!;
 }

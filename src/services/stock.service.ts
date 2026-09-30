@@ -84,6 +84,19 @@ export interface PostMovementsArgs {
   bypassFreeze?: boolean;
 }
 
+/**
+ * Outbound movements that must leave confirmed orders' reservations intact — they take only
+ * *available* stock. Adjustments, damage write-offs and count variances are not on this list:
+ * they record what physically happened to the shelf, and refusing them would make the ledger lie.
+ * If one of them takes on-hand below what is reserved, the orders are short and the dispatch
+ * desk finds out when it tries to ship — which is the truth.
+ */
+const RESPECTS_RESERVATIONS: readonly StockMovementType[] = [
+  'SALE',
+  'TRANSFER_OUT',
+  'PURCHASE_RETURN',
+];
+
 /** The refusal a frozen row produces — its own code, so the UI can say "a count is in progress". */
 function frozenError(m: MovementInput, countId: Types.ObjectId): ApiError {
   return ApiError.conflict(
@@ -508,11 +521,18 @@ export async function postMovements(
 
     if (m.qtyBase < 0) {
       const needed = -m.qtyBase;
+      // A sale or transfer may take only what is *available*: on hand less what confirmed orders
+      // have reserved (plus whatever of that reservation this movement itself fulfils). Without
+      // this a counter sale could sell the units a dealer's order is waiting on.
+      const reservedAfterRelease = RESPECTS_RESERVATIONS.includes(m.movementType)
+        ? { $expr: { $gte: [{ $subtract: ['$qtyOnHand', '$qtyReserved'] }, needed - release] } }
+        : {};
       const guard = allowNegative
         ? {}
         : {
             qtyOnHand: { $gte: needed },
             ...(release > 0 ? { qtyReserved: { $gte: release } } : {}),
+            ...reservedAfterRelease,
           };
 
       const updated = await StockBalance.findOneAndUpdate(
@@ -529,13 +549,27 @@ export async function postMovements(
         const current = await StockBalance.findOne(key).session(session).lean();
         if (current?.frozenByCountId && !bypassFreeze)
           throw frozenError(m, current.frozenByCountId);
-        throw ApiError.conflict('INSUFFICIENT_STOCK', 'Not enough stock for this movement', {
-          locationId: String(m.locationId),
-          productId: String(m.productId),
-          variantId: m.variantId ? String(m.variantId) : null,
-          requested: needed,
-          available: current?.qtyOnHand ?? 0,
-        });
+        const onHand = current?.qtyOnHand ?? 0;
+        const reserved = current?.qtyReserved ?? 0;
+        const heldForOrders =
+          onHand >= needed && RESPECTS_RESERVATIONS.includes(m.movementType);
+        throw ApiError.conflict(
+          'INSUFFICIENT_STOCK',
+          heldForOrders
+            ? 'Not enough stock for this movement — some of it is reserved for confirmed orders'
+            : 'Not enough stock for this movement',
+          {
+            locationId: String(m.locationId),
+            productId: String(m.productId),
+            variantId: m.variantId ? String(m.variantId) : null,
+            requested: needed,
+            onHand,
+            reserved,
+            available: RESPECTS_RESERVATIONS.includes(m.movementType)
+              ? Math.max(0, onHand - reserved + release)
+              : onHand,
+          },
+        );
       }
       // Frozen but with enough stock: the update went through inside this transaction, and
       // throwing now rolls it back with everything else.
@@ -614,4 +648,120 @@ export async function postMovements(
   return (await StockLedger.insertMany(rows, { session, ordered: true })).map((d) =>
     d.toObject(),
   );
+}
+
+// ─── Reservations (Day 22) ──────────────────────────────────────────────────────────────
+
+export interface ReservationLine {
+  locationId: Types.ObjectId;
+  productId: Types.ObjectId;
+  variantId: Types.ObjectId | null;
+  qtyBase: number;
+}
+
+export interface ReserveArgs {
+  orgId: Types.ObjectId;
+  lines: readonly ReservationLine[];
+  /** For the error: which line of the caller's document could not be reserved. */
+  pathOf?: (index: number) => string;
+}
+
+function assertReservationShape(l: ReservationLine, index: number): void {
+  if (!Number.isInteger(l.qtyBase) || l.qtyBase <= 0) {
+    throw ApiError.internal(`Reservation ${index}: qtyBase must be a positive integer`);
+  }
+}
+
+/**
+ * Promise stock to a confirmed order: `qtyReserved += qty`, **no ledger row** (§7 — the ledger
+ * records physical movement only, so its running sum stays equal to what is on the shelf).
+ *
+ * Guarded like an outbound movement: the row is updated only `WHERE qtyOnHand − qtyReserved ≥
+ * qty`, so two orders confirmed at once cannot both be promised the last ten units — one matches,
+ * the other gets `409 INSUFFICIENT_STOCK` naming the line. With `allowNegativeStock` the promise
+ * is made regardless, as an outbound movement would be.
+ *
+ * Takes the caller's session and never commits: a refusal on the third line rolls back the first
+ * two with the rest of the confirm.
+ */
+export async function reserveStock(
+  session: ClientSession,
+  { orgId, lines, pathOf = (i) => `lines.${i}` }: ReserveArgs,
+): Promise<void> {
+  lines.forEach(assertReservationShape);
+  const org = await Org.findById(orgId)
+    .select('settings.allowNegativeStock')
+    .session(session)
+    .lean();
+  const allowNegative = Boolean(org?.settings?.allowNegativeStock);
+
+  for (const [i, l] of lines.entries()) {
+    const key = {
+      orgId,
+      locationId: l.locationId,
+      productId: l.productId,
+      variantId: l.variantId,
+    };
+    const guard = allowNegative
+      ? {}
+      : { $expr: { $gte: [{ $subtract: ['$qtyOnHand', '$qtyReserved'] }, l.qtyBase] } };
+    const updated = await StockBalance.findOneAndUpdate(
+      { ...key, ...guard },
+      { $inc: { qtyReserved: l.qtyBase } },
+      { new: true, session, upsert: allowNegative, setDefaultsOnInsert: true },
+    ).lean();
+    if (!updated) {
+      const current = await StockBalance.findOne(key).session(session).lean();
+      const onHand = current?.qtyOnHand ?? 0;
+      const reserved = current?.qtyReserved ?? 0;
+      const [product, variant] = await Promise.all([
+        Product.findById(l.productId).select('sku').session(session).lean(),
+        l.variantId
+          ? Variant.findById(l.variantId).select('sku').session(session).lean()
+          : Promise.resolve(null),
+      ]);
+      throw ApiError.conflict(
+        'INSUFFICIENT_STOCK',
+        `Not enough ${variant?.sku ?? product?.sku ?? 'stock'} available to reserve`,
+        {
+          path: pathOf(i),
+          locationId: String(l.locationId),
+          productId: String(l.productId),
+          variantId: l.variantId ? String(l.variantId) : null,
+          requested: l.qtyBase,
+          onHand,
+          reserved,
+          available: Math.max(0, onHand - reserved),
+        },
+      );
+    }
+  }
+}
+
+/**
+ * Give a reservation back — a cancelled order, a short close. The inverse of `reserveStock`,
+ * guarded so it can never drive `qtyReserved` below zero: a release of more than is held is a
+ * bookkeeping bug in the caller, and is refused as one rather than quietly clamped.
+ */
+export async function releaseReservation(
+  session: ClientSession,
+  { orgId, lines }: Omit<ReserveArgs, 'pathOf'>,
+): Promise<void> {
+  lines.forEach(assertReservationShape);
+  for (const [i, l] of lines.entries()) {
+    const res = await StockBalance.updateOne(
+      {
+        orgId,
+        locationId: l.locationId,
+        productId: l.productId,
+        variantId: l.variantId,
+        qtyReserved: { $gte: l.qtyBase },
+      },
+      { $inc: { qtyReserved: -l.qtyBase } },
+      { session },
+    );
+    if (res.matchedCount !== 1) {
+      throw ApiError.internal(`Release ${i}: more than is reserved at this location`);
+    }
+  }
 }

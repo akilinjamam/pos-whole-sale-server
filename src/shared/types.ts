@@ -1167,6 +1167,8 @@ export interface WholesaleOrderPayload {
   billingStatus: BillingStatus;
   lines: OrderLinePayload[];
   subtotalMinor: number;
+  /** What was asked for — re-applied when the order is repriced at confirm. */
+  orderDiscount: OrderDiscountSpec | null;
   orderDiscountMinor: number;
   taxMinor: number;
   shippingMinor: number;
@@ -1186,4 +1188,57 @@ export interface WholesaleOrderPayload {
   closedAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export type OrderDiscountSpec =
+  { kind: 'AMOUNT'; amountMinor: number } | { kind: 'PCT'; pct: number };
+
+// ─── Order pricing (Day 22) ─────────────────────────────────────────────────────────────
+
+/** One line of an order as the pricing engine sees it — the builder's live grid. */
+export interface OrderQuoteLine {
+  productId: string;
+  variantId: string | null;
+  sku: string;
+  productName: string;
+  uomCode: string;
+  qty: number;
+  qtyBase: number;
+  /** Which rule priced it, and the price before the dealer's trade discount. */
+  priceSource: PriceSource;
+  listUnitPriceMinor: number;
+  tradeDiscountPct: number;
+  /** What the engine says, and what the line charges (differs only when overridden). */
+  resolvedUnitPriceMinor: number;
+  unitPriceMinor: number;
+  priceOverridden: boolean;
+  /** The line's own extra discount %, and its total discount incl. its order-discount share. */
+  discountPct: number;
+  discountMinor: number;
+  lineTotalMinor: number;
+  nextBreak: PriceResolution['nextBreak'];
+  /** On hand − reserved at the order's location, in base units. */
+  availableBase: number;
+}
+
+export interface OrderCreditPosition {
+  balanceMinor: number;
+  limitMinor: number;
+  creditHold: boolean;
+  /** Balance + this order. Day 31 widens it to open orders and unallocated receipts. */
+  exposureAfterMinor: number;
+  verdict: 'OK' | 'ON_HOLD' | 'OVER_LIMIT' | 'CASH_ONLY';
+  message: string | null;
+  /** Whether this caller could confirm past a refusal (holds `order:creditOverride`). */
+  canOverride: boolean;
+}
+
+export interface OrderQuote {
+  lines: OrderQuoteLine[];
+  subtotalMinor: number;
+  orderDiscountMinor: number;
+  taxMinor: number;
+  shippingMinor: number;
+  grandTotalMinor: number;
+  credit: OrderCreditPosition;
 }

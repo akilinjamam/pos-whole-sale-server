@@ -81,6 +81,12 @@ export interface OrderCreditCheckDoc {
   overrideReason: string | null;
 }
 
+export interface OrderDiscountSpecDoc {
+  kind: 'AMOUNT' | 'PCT';
+  amountMinor: number;
+  pct: number;
+}
+
 export interface WholesaleOrderDoc {
   _id: Types.ObjectId;
   orgId: Types.ObjectId;
@@ -98,6 +104,8 @@ export interface WholesaleOrderDoc {
   billingStatus: BillingStatus;
   lines: OrderLineDoc[];
   subtotalMinor: number;
+  /** The discount as asked for (an amount or a %); null for none. */
+  orderDiscount: OrderDiscountSpecDoc | null;
   orderDiscountMinor: number;
   taxMinor: number;
   shippingMinor: number;
@@ -176,6 +184,15 @@ const creditCheckSchema = new Schema<OrderCreditCheckDoc>(
   { _id: false },
 );
 
+const discountSpecSchema = new Schema<OrderDiscountSpecDoc>(
+  {
+    kind: { type: String, enum: ['AMOUNT', 'PCT'], required: true },
+    amountMinor: { type: Number, default: 0, min: 0 },
+    pct: { type: Number, default: 0, min: 0, max: 100 },
+  },
+  { _id: false },
+);
+
 const wholesaleOrderSchema = new Schema<WholesaleOrderDoc>(
   {
     ...auditableFields,
@@ -191,6 +208,7 @@ const wholesaleOrderSchema = new Schema<WholesaleOrderDoc>(
     billingStatus: { type: String, enum: BILLING_STATUSES, default: 'UNBILLED' },
     lines: { type: [lineSchema], default: [] },
     subtotalMinor: { type: Number, default: 0 },
+    orderDiscount: { type: discountSpecSchema, default: null },
     orderDiscountMinor: { type: Number, default: 0, min: 0 },
     taxMinor: { type: Number, default: 0 },
     shippingMinor: { type: Number, default: 0, min: 0 },
@@ -396,6 +414,11 @@ export function toWholesaleOrderPayload(
       };
     }),
     subtotalMinor: doc.subtotalMinor,
+    orderDiscount: doc.orderDiscount
+      ? doc.orderDiscount.kind === 'AMOUNT'
+        ? { kind: 'AMOUNT', amountMinor: doc.orderDiscount.amountMinor }
+        : { kind: 'PCT', pct: doc.orderDiscount.pct }
+      : null,
     orderDiscountMinor: doc.orderDiscountMinor,
     taxMinor: doc.taxMinor,
     shippingMinor: doc.shippingMinor,

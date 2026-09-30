@@ -252,10 +252,10 @@ describe('transitionOrder', () => {
     await markCreditOk(id);
     await move(id, 'CONFIRMED');
 
-    const results = await Promise.allSettled([
-      move(id, 'PICKING'),
-      move(id, 'CANCELLED', 'ZZTEST race'),
-    ]);
+    // The same move twice, so the loser is illegal whichever lands first. (Two *different* moves
+    // can both be legal in sequence — a loser retried after a WriteConflict re-reads the order and
+    // is judged against the winner's status, which is the point of the retry.)
+    const results = await Promise.allSettled([move(id, 'PICKING'), move(id, 'PICKING')]);
     const won = results.filter((r) => r.status === 'fulfilled');
     const lost = results.filter((r) => r.status === 'rejected') as PromiseRejectedResult[];
     expect(won).toHaveLength(1);
