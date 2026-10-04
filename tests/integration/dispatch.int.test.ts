@@ -1,0 +1,432 @@
+import { Types } from 'mongoose';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { connectDatabase, disconnectDatabase } from '../../src/config/db.js';
+import { ApiError } from '../../src/lib/ApiError.js';
+import { withTransaction } from '../../src/lib/withTransaction.js';
+import { Dispatch } from '../../src/modules/dispatch/dispatch.model.js';
+import {
+  cancelDispatch,
+  createDispatch,
+  packDispatch,
+  postDispatch,
+  updateDispatch,
+} from '../../src/modules/dispatch/dispatch.service.js';
+import { Invoice } from '../../src/modules/invoice/invoice.model.js';
+import { LedgerEntry } from '../../src/modules/ledger/ledgerEntry.model.js';
+import { Org } from '../../src/modules/org/org.model.js';
+import { Party } from '../../src/modules/party/party.model.js';
+import { SerialUnit } from '../../src/modules/serialUnit/serialUnit.model.js';
+import { StockBalance } from '../../src/modules/stock/stockBalance.model.js';
+import { StockLedger } from '../../src/modules/stock/stockLedger.model.js';
+import { WholesaleOrder } from '../../src/modules/wholesaleOrder/wholesaleOrder.model.js';
+import {
+  cancelOrder,
+  confirmOrder,
+  createOrder,
+} from '../../src/modules/wholesaleOrder/wholesaleOrder.service.js';
+import { postMovements } from '../../src/services/stock.service.js';
+
+import { actorFor, cleanupOrg, createPosFixture } from './fixtures/posFixture.js';
+
+import type { PosFixture } from './fixtures/posFixture.js';
+import type { OrderLineInput } from '../../src/shared/orders.js';
+
+/**
+ * Day 24's "done when", against a real replica set:
+ *   - partial dispatch works — stock, the order's counters, its status, the invoice and the
+ *     dealer's ledger all move together, and the parts add up to the order;
+ *   - the concurrency test — two simultaneous dispatches of the last units: exactly one wins.
+ *
+ * Posting consumes stock, so each scenario gets its own throwaway org: 60 frames (PCS, DOZ ×12,
+ * ৳60 each) and two serialised machines (ZZSN-1, ZZSN-2) at ৳50,000.
+ */
+
+const oid = (id: string) => new Types.ObjectId(id);
+
+async function world() {
+  const f = await createPosFixture();
+  const actor = actorFor(f);
+  const shelf = async (productId: string) => {
+    const b = await StockBalance.findOne({
+      orgId: f.orgId,
+      locationId: f.locationId,
+      productId: oid(productId),
+    }).lean();
+    return { onHand: b?.qtyOnHand ?? 0, reserved: b?.qtyReserved ?? 0 };
+  };
+  const confirmed = async (lines: OrderLineInput[]) => {
+    const draft = await createOrder(actor, {
+      dealerPartyId: f.dealerId,
+      locationId: String(f.locationId),
+      lines,
+    });
+    return confirmOrder(actor, oid(draft.id), {});
+  };
+  const order = async (id: string) => (await WholesaleOrder.findById(id).lean())!;
+  const balance = async () => (await Party.findById(f.dealerId).lean())!.currentBalanceMinor;
+  return { f, actor, shelf, confirmed, order, balance };
+}
+
+async function refusal(p: Promise<unknown>): Promise<ApiError> {
+  const err = await p.then(
+    () => null,
+    (e: unknown) => e,
+  );
+  expect(err).toBeInstanceOf(ApiError);
+  return err as ApiError;
+}
+
+const orgs: Types.ObjectId[] = [];
+let w: Awaited<ReturnType<typeof world>>;
+
+beforeAll(async () => {
+  await connectDatabase();
+  await Promise.all([
+    Dispatch.syncIndexes(),
+    Invoice.syncIndexes(),
+    WholesaleOrder.syncIndexes(),
+  ]);
+}, 120_000);
+
+afterAll(async () => {
+  for (const orgId of orgs) await cleanupOrg(orgId);
+  await disconnectDatabase();
+});
+
+const fresh = async () => {
+  w = await world();
+  orgs.push(w.f.orgId);
+};
+
+describe('partial dispatch: ship half, then the rest', () => {
+  beforeAll(fresh, 120_000);
+
+  it('works end to end, and the two invoices add up to the order exactly', async () => {
+    const { f, actor, shelf, confirmed, order, balance } = w;
+    const o = await confirmed([
+      { productId: f.frameId, uomCode: 'DOZ', qty: 2 }, // 24 PCS, ৳1,440
+      { productId: f.machineId, qty: 1 }, // ৳50,000
+    ]);
+    const frameLine = o.lines[0]!.id;
+    const machineLine = o.lines[1]!.id;
+    expect(await shelf(f.frameId)).toEqual({ onHand: 60, reserved: 24 });
+
+    // ── First challan: one dozen frames only ──
+    const d1 = await createDispatch(actor, {
+      orderId: o.id,
+      lines: [{ orderLineId: frameLine, qtyBase: 12 }],
+    });
+    expect(d1).toMatchObject({ status: 'DRAFT', docNo: null, orderDocNo: o.docNo });
+    expect((await order(o.id)).status).toBe('PICKING');
+
+    await packDispatch(actor, oid(d1.id));
+    expect((await order(o.id)).status).toBe('PACKED');
+
+    const r1 = await postDispatch(actor, oid(d1.id));
+    expect(r1.dispatch).toMatchObject({
+      status: 'DISPATCHED',
+      docNo: expect.stringMatching(/^CHL-/),
+    });
+    expect(r1.order).toMatchObject({
+      status: 'PARTIALLY_DISPATCHED',
+      fulfillmentStatus: 'PARTIAL',
+      billingStatus: 'PARTIAL',
+    });
+    expect(r1.order.lines[0]).toMatchObject({
+      qtyDispatchedBase: 12,
+      qtyReservedBase: 12,
+      qtyInvoicedBase: 12,
+      qtyOutstandingBase: 12,
+    });
+    // Stock left the shelf, and took its reservation with it.
+    expect(await shelf(f.frameId)).toEqual({ onHand: 48, reserved: 12 });
+    const rows = await StockLedger.find({ orgId: f.orgId, refType: 'DISPATCH' }).lean();
+    expect(rows.map((r) => [r.movementType, r.qtyBase, r.refDocNo])).toEqual([
+      ['SALE', -12, r1.dispatch.docNo],
+    ]);
+    // One dozen at ৳720, invoiced in the order's unit, debited to the dealer.
+    expect(r1.invoice).toMatchObject({
+      docNo: expect.stringMatching(/^WS-/),
+      grandTotalMinor: 72_000,
+      balanceMinor: 72_000,
+      paymentStatus: 'UNPAID',
+    });
+    expect(r1.invoice!.lines[0]).toMatchObject({ uomCode: 'DOZ', uomQty: 1, qtyBase: 12 });
+    expect(await balance()).toBe(72_000);
+
+    // ── Second challan: everything left — the default ──
+    const d2 = await createDispatch(actor, { orderId: o.id });
+    expect((await order(o.id)).status).toBe('PICKING');
+    expect(d2.lines.map((l) => [l.orderLineId, l.qtyBase])).toEqual([
+      [frameLine, 12],
+      [machineLine, 1],
+    ]);
+
+    // The machine is serialised: packing without the serial is refused.
+    const noSerial = await refusal(packDispatch(actor, oid(d2.id)));
+    expect(noSerial.status).toBe(422);
+    expect(noSerial.details).toEqual([expect.objectContaining({ path: 'lines.1.serials' })]);
+
+    await updateDispatch(actor, oid(d2.id), {
+      lines: [
+        { orderLineId: frameLine, qtyBase: 12 },
+        { orderLineId: machineLine, qtyBase: 1, serials: ['ZZSN-1'] },
+      ],
+      transport: { mode: 'COURIER', courierName: 'ZZTEST Sundarban', trackingNo: 'ZZ-1' },
+    });
+    await packDispatch(actor, oid(d2.id));
+    const r2 = await postDispatch(actor, oid(d2.id));
+
+    expect(r2.order).toMatchObject({
+      status: 'DISPATCHED',
+      fulfillmentStatus: 'COMPLETE',
+      billingStatus: 'BILLED',
+    });
+    expect(
+      r2.order.lines.every((l) => l.qtyReservedBase === 0 && l.qtyOutstandingBase === 0),
+    ).toBe(true);
+    expect(await shelf(f.frameId)).toEqual({ onHand: 36, reserved: 0 });
+    expect(await shelf(f.machineId)).toEqual({ onHand: 1, reserved: 0 });
+    const unit = await SerialUnit.findOne({ orgId: f.orgId, serialNo: 'ZZSN-1' }).lean();
+    expect(unit?.status).toBe('SOLD');
+
+    // The two invoices add up to the order, to the poisha; the ledger agrees.
+    const invoices = await Invoice.find({ orgId: f.orgId, orderId: oid(o.id) }).lean();
+    expect(invoices).toHaveLength(2);
+    expect(invoices.reduce((s, i) => s + i.grandTotalMinor, 0)).toBe(o.grandTotalMinor);
+    expect(await balance()).toBe(o.grandTotalMinor);
+    const debits = await LedgerEntry.find({ orgId: f.orgId, docType: 'INVOICE' }).lean();
+    expect(debits.reduce((s, e) => s + e.debitMinor, 0)).toBe(o.grandTotalMinor);
+
+    expect(r2.order.statusHistory.map((h) => h.action)).toEqual([
+      'create',
+      'confirm',
+      'startPicking',
+      'pack',
+      'dispatch',
+      'startPicking',
+      'pack',
+      'dispatch',
+    ]);
+  });
+
+  it('refuses a challan for more than is left to ship', async () => {
+    const { f, actor, confirmed } = w;
+    const o = await confirmed([{ productId: f.frameId, qty: 5 }]);
+    const err = await refusal(
+      createDispatch(actor, {
+        orderId: o.id,
+        lines: [{ orderLineId: o.lines[0]!.id, qtyBase: 6 }],
+      }),
+    );
+    expect(err.status).toBe(422);
+    expect(err.details).toEqual([
+      expect.objectContaining({
+        path: 'lines.0.qtyBase',
+        message: 'Line 1 has only 5 left to ship',
+      }),
+    ]);
+    await cancelOrder(actor, oid(o.id), { reason: 'ZZTEST tidy' });
+  });
+
+  it('a posted challan cannot be cancelled; an order with a posted challan cannot be either', async () => {
+    const { f, actor, confirmed } = w;
+    const o = await confirmed([{ productId: f.frameId, qty: 4 }]);
+    const d = await createDispatch(actor, {
+      orderId: o.id,
+      lines: [{ orderLineId: o.lines[0]!.id, qtyBase: 2 }],
+    });
+    await packDispatch(actor, oid(d.id));
+    await postDispatch(actor, oid(d.id));
+    expect((await refusal(cancelDispatch(actor, oid(d.id), { reason: 'ZZTEST' }))).status).toBe(
+      409,
+    );
+    expect((await refusal(cancelOrder(actor, oid(o.id), { reason: 'ZZTEST' }))).code).toBe(
+      'ILLEGAL_TRANSITION',
+    );
+  });
+});
+
+describe('cancelling an order takes its open challans with it', () => {
+  beforeAll(fresh, 120_000);
+
+  it('a packed challan of a cancelled order is cancelled, and cannot be posted', async () => {
+    const { f, actor, shelf, confirmed } = w;
+    const o = await confirmed([{ productId: f.frameId, qty: 10 }]);
+    const d = await createDispatch(actor, { orderId: o.id });
+    await packDispatch(actor, oid(d.id));
+    await cancelOrder(actor, oid(o.id), { reason: 'ZZTEST dealer withdrew' });
+
+    const challan = (await Dispatch.findById(d.id).lean())!;
+    expect(challan.status).toBe('CANCELLED');
+    expect(challan.cancelReason).toBe('Order cancelled: ZZTEST dealer withdrew');
+    expect((await refusal(postDispatch(actor, oid(d.id)))).status).toBe(409);
+    expect(await shelf(f.frameId)).toEqual({ onHand: 60, reserved: 0 });
+  });
+});
+
+describe('posting is atomic', () => {
+  beforeAll(fresh, 120_000);
+
+  it('a failure just before commit leaves no trace — challan, stock, order, invoice, ledger', async () => {
+    const { f, actor, shelf, confirmed, order, balance } = w;
+    const o = await confirmed([{ productId: f.frameId, qty: 10 }]);
+    const d = await createDispatch(actor, { orderId: o.id });
+    await packDispatch(actor, oid(d.id));
+    const before = {
+      shelf: await shelf(f.frameId),
+      order: (await order(o.id)).lines,
+      balance: await balance(),
+      invoices: await Invoice.countDocuments({ orgId: f.orgId }),
+      ledger: await StockLedger.countDocuments({ orgId: f.orgId }),
+    };
+
+    const err = await postDispatch(actor, oid(d.id), {
+      beforeCommit: () => {
+        throw new Error('ZZTEST power cut');
+      },
+    }).catch((e: unknown) => e);
+    expect((err as Error).message).toBe('ZZTEST power cut');
+
+    expect((await Dispatch.findById(d.id).lean())!).toMatchObject({
+      status: 'PACKED',
+      docNo: null,
+    });
+    expect({
+      shelf: await shelf(f.frameId),
+      order: (await order(o.id)).lines,
+      balance: await balance(),
+      invoices: await Invoice.countDocuments({ orgId: f.orgId }),
+      ledger: await StockLedger.countDocuments({ orgId: f.orgId }),
+    }).toEqual(before);
+    expect((await order(o.id)).status).toBe('PACKED');
+
+    // And it posts cleanly afterwards.
+    expect((await postDispatch(actor, oid(d.id))).order.status).toBe('DISPATCHED');
+  });
+
+  it('without invoiceOnDispatch, stock and the order move but nothing is billed', async () => {
+    const { f, actor, confirmed, balance } = w;
+    await Org.updateOne({ _id: f.orgId }, { $set: { 'settings.invoiceOnDispatch': false } });
+    try {
+      const before = await balance();
+      const o = await confirmed([{ productId: f.frameId, qty: 3 }]);
+      const d = await createDispatch(actor, { orderId: o.id });
+      await packDispatch(actor, oid(d.id));
+      const r = await postDispatch(actor, oid(d.id));
+      expect(r.invoice).toBeNull();
+      expect(r.dispatch.invoiceDocNo).toBeNull();
+      expect(r.order).toMatchObject({ status: 'DISPATCHED', billingStatus: 'UNBILLED' });
+      expect(await balance()).toBe(before);
+    } finally {
+      await Org.updateOne({ _id: f.orgId }, { $set: { 'settings.invoiceOnDispatch': true } });
+    }
+  });
+});
+
+describe('concurrency: two dispatches, one set of units — exactly one wins', () => {
+  beforeAll(fresh, 120_000);
+
+  async function race(a: string, b: string) {
+    const results = await Promise.allSettled([
+      postDispatch(w.actor, oid(a)),
+      postDispatch(w.actor, oid(b)),
+    ]);
+    const won = results.filter((r) => r.status === 'fulfilled');
+    const lost = results.filter((r) => r.status === 'rejected') as PromiseRejectedResult[];
+    return { won, lost };
+  }
+
+  it('two challans for the same order line: one ships, the other is refused', async () => {
+    const { f, actor, shelf, confirmed, balance } = w;
+    const o = await confirmed([{ productId: f.frameId, qty: 20 }]);
+    const line = o.lines[0]!.id;
+    // Two pickers each pick the whole line — both are within what is left *at pick time*.
+    const a = await createDispatch(actor, {
+      orderId: o.id,
+      lines: [{ orderLineId: line, qtyBase: 20 }],
+    });
+    const b = await createDispatch(actor, {
+      orderId: o.id,
+      lines: [{ orderLineId: line, qtyBase: 20 }],
+    });
+    await packDispatch(actor, oid(a.id));
+    await packDispatch(actor, oid(b.id));
+    const before = { shelf: await shelf(f.frameId), balance: await balance() };
+
+    const { won, lost } = await race(a.id, b.id);
+    expect(won).toHaveLength(1);
+    expect(lost).toHaveLength(1);
+    expect(lost[0]!.reason).toBeInstanceOf(ApiError);
+    expect((lost[0]!.reason as ApiError).status).toBe(409);
+
+    // Shipped once, invoiced once.
+    expect(await shelf(f.frameId)).toEqual({
+      onHand: before.shelf.onHand - 20,
+      reserved: before.shelf.reserved - 20,
+    });
+    expect(await Invoice.countDocuments({ orgId: f.orgId, orderId: oid(o.id) })).toBe(1);
+    expect(await balance()).toBe(before.balance + o.grandTotalMinor);
+    const statuses = (await Dispatch.find({ _id: { $in: [oid(a.id), oid(b.id)] } }).lean())
+      .map((d) => d.status)
+      .sort();
+    expect(statuses).toEqual(['DISPATCHED', 'PACKED']);
+    // Tidy the loser.
+    const loser =
+      statuses[1] === 'PACKED'
+        ? (await Dispatch.findOne({
+            _id: { $in: [oid(a.id), oid(b.id)] },
+            status: 'PACKED',
+          }).lean())!
+        : null;
+    if (loser) await cancelDispatch(actor, loser._id, { reason: 'ZZTEST lost the race' });
+  });
+
+  it('two orders racing for the last units on the shelf: one ships, the other gets INSUFFICIENT_STOCK', async () => {
+    const { f, actor, shelf, confirmed } = w;
+    const { onHand } = await shelf(f.frameId); // 40 after the test above
+    const half = onHand / 2;
+    const A = await confirmed([{ productId: f.frameId, qty: half }]);
+    const B = await confirmed([{ productId: f.frameId, qty: half }]);
+    expect(await shelf(f.frameId)).toEqual({ onHand, reserved: onHand });
+
+    // Half the shelf is found broken. A write-off records what physically happened, so it is not
+    // blocked by reservations — and now two orders are promised `onHand` units with `half` left.
+    await withTransaction((session) =>
+      postMovements(session, {
+        orgId: f.orgId,
+        postedAt: new Date(),
+        actorId: f.userId,
+        movements: [
+          {
+            locationId: f.locationId,
+            productId: oid(f.frameId),
+            variantId: null,
+            qtyBase: -half,
+            movementType: 'ADJUSTMENT',
+            refType: 'ZZTEST',
+          },
+        ],
+      }),
+    );
+    expect(await shelf(f.frameId)).toEqual({ onHand: half, reserved: onHand });
+
+    const a = await createDispatch(actor, { orderId: A.id });
+    const b = await createDispatch(actor, { orderId: B.id });
+    await packDispatch(actor, oid(a.id));
+    await packDispatch(actor, oid(b.id));
+
+    const { won, lost } = await race(a.id, b.id);
+    expect(won).toHaveLength(1);
+    expect(lost).toHaveLength(1);
+    expect((lost[0]!.reason as ApiError).code).toBe('INSUFFICIENT_STOCK');
+    expect(await shelf(f.frameId)).toEqual({ onHand: 0, reserved: half });
+    const sold = await StockLedger.countDocuments({
+      orgId: f.orgId,
+      refType: 'DISPATCH',
+      refId: { $in: [oid(a.id), oid(b.id)] },
+    });
+    expect(sold).toBe(1);
+  });
+});

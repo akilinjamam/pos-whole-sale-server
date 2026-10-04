@@ -13,6 +13,7 @@ import { dayIn, dayToDate } from '../../lib/period.js';
 import { withTransaction } from '../../lib/withTransaction.js';
 import { locationScopeOf } from '../../middleware/requireLocation.js';
 import { releaseReservation, reserveStock } from '../../services/stock.service.js';
+import { Dispatch } from '../dispatch/dispatch.model.js';
 import { Location } from '../location/location.model.js';
 import { Org } from '../org/org.model.js';
 import { Party } from '../party/party.model.js';
@@ -706,6 +707,21 @@ export async function cancelOrder(
         { session },
       );
     }
+    // Its open challans go with it — a packed challan for a cancelled order must not be postable.
+    // (The state machine refuses the cancel once any challan has been *posted*.)
+    await Dispatch.updateMany(
+      { orgId: actor.orgId, orderId: id, status: { $in: ['DRAFT', 'PACKED'] } },
+      {
+        $set: {
+          status: 'CANCELLED',
+          cancelledAt: new Date(),
+          cancelledBy: actor.actorId,
+          cancelReason: `Order cancelled${input.reason ? `: ${input.reason}` : ''}`,
+          updatedBy: actor.actorId,
+        },
+      },
+      { session },
+    );
     // Last, so a refusal (illegal from this status, no reason) rolls the release back with it.
     return transitionOrder(actor, id, 'CANCELLED', { session, reason: input.reason ?? null });
   });

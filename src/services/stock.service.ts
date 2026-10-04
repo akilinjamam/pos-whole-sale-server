@@ -521,12 +521,19 @@ export async function postMovements(
 
     if (m.qtyBase < 0) {
       const needed = -m.qtyBase;
-      // A sale or transfer may take only what is *available*: on hand less what confirmed orders
-      // have reserved (plus whatever of that reservation this movement itself fulfils). Without
-      // this a counter sale could sell the units a dealer's order is waiting on.
-      const reservedAfterRelease = RESPECTS_RESERVATIONS.includes(m.movementType)
-        ? { $expr: { $gte: [{ $subtract: ['$qtyOnHand', '$qtyReserved'] }, needed - release] } }
-        : {};
+      // A sale or transfer may take only what is *available* — on hand less what confirmed orders
+      // have reserved — for whatever part of it is NOT its own reservation. Without this a counter
+      // sale could sell the units a dealer's order is waiting on.
+      //
+      // The part it *was* promised (`release`) needs only to physically exist. Requiring on-hand
+      // to keep covering everyone else's reservations too would deadlock a shortage: two orders
+      // promised 20 each with 20 left (a write-off after both confirmed) could then neither ship.
+      // Instead the first dispatch takes them and the second finds the shelf empty.
+      const unreserved = needed - release;
+      const reservedAfterRelease =
+        RESPECTS_RESERVATIONS.includes(m.movementType) && unreserved > 0
+          ? { $expr: { $gte: [{ $subtract: ['$qtyOnHand', '$qtyReserved'] }, unreserved] } }
+          : {};
       const guard = allowNegative
         ? {}
         : {

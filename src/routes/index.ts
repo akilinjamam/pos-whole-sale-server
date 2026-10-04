@@ -4,6 +4,7 @@ import authRouter from '../modules/auth/auth.route.js';
 import barcodeRouter from '../modules/barcode/barcode.route.js';
 import brandRouter from '../modules/brand/brand.route.js';
 import categoryRouter from '../modules/category/category.route.js';
+import dispatchRouter from '../modules/dispatch/dispatch.route.js';
 import healthRouter from '../modules/health/health.route.js';
 import lotRouter from '../modules/lot/lot.route.js';
 import numberSeriesRouter from '../modules/numberSeries/numberSeries.route.js';
@@ -95,6 +96,10 @@ export const allRoutes: RouteEntry[] = [
 
   // Wholesale orders (Day 21). Status moves only through `domain/orderStateMachine.ts`.
   { path: 'orders', route: wholesaleOrderRouter },
+
+  // Dispatch (Day 24): pick → pack → post. Posting moves stock, the order and — with
+  // `invoiceOnDispatch` — raises the challan's invoice and ledger debit, in one transaction.
+  { path: 'dispatches', route: dispatchRouter },
 ];
 
 /** Paths that skip authentication, as full mount prefixes. */
