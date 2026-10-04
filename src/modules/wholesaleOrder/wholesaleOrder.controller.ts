@@ -51,3 +51,18 @@ export const reject = asyncHandler(async (req, res) => {
 export const cancel = asyncHandler(async (req, res) => {
   sendData(res, await service.cancelOrder(requestActorOf(req), idOf(req), req.body));
 });
+
+export const counts = asyncHandler(async (req, res) => {
+  sendData(
+    res,
+    await service.orderCounts(requestActorOf(req), req.query as { locationId?: string }),
+  );
+});
+
+export const shortClose = asyncHandler(async (req, res) => {
+  sendData(res, await service.shortCloseOrder(requestActorOf(req), idOf(req), req.body));
+});
+
+export const close = asyncHandler(async (req, res) => {
+  sendData(res, await service.closeOrder(requestActorOf(req), idOf(req)));
+});

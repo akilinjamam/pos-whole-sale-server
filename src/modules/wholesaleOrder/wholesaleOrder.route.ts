@@ -12,6 +12,7 @@ import {
   createOrderSchema,
   idParamSchema,
   listOrdersQuerySchema,
+  orderCountsQuerySchema,
   orderReasonSchema,
   quoteOrderSchema,
   updateOrderSchema,
@@ -40,7 +41,15 @@ router.get(
   validate({ query: listOrdersQuerySchema }),
   ctrl.list,
 );
-// Before `/:id`, which would otherwise capture "quote".
+// Before `/:id`, which would otherwise capture "counts" and "quote".
+router.get(
+  '/counts',
+  authenticate,
+  requirePermission('order:read'),
+  requireLocation,
+  validate({ query: orderCountsQuerySchema }),
+  ctrl.counts,
+);
 router.post(
   '/quote',
   authenticate,
@@ -89,6 +98,20 @@ router.post(
   requirePermission('order:approve'),
   validate({ params: idParamSchema, body: orderReasonSchema }),
   ctrl.reject,
+);
+router.post(
+  '/:id/short-close',
+  authenticate,
+  requirePermission('order:shortClose'),
+  validate({ params: idParamSchema, body: orderReasonSchema }),
+  ctrl.shortClose,
+);
+router.post(
+  '/:id/close',
+  authenticate,
+  requirePermission('order:update'),
+  validate({ params: idParamSchema }),
+  ctrl.close,
 );
 router.post(
   '/:id/cancel',

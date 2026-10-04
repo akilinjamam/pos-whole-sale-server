@@ -1147,6 +1147,12 @@ export interface OrderStatusHistoryPayload {
   reason: string | null;
 }
 
+/** The order board's tabs (Day 26): how many orders sit in each status. */
+export interface OrderCounts {
+  byStatus: Record<OrderStatus, number>;
+  total: number;
+}
+
 export interface OrderCreditCheckPayload {
   status: CreditCheckStatus;
   checkedAt: string;

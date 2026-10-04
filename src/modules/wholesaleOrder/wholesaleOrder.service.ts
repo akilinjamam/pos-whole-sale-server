@@ -4,6 +4,8 @@ import { availableActions, can } from '../../domain/orderStateMachine.js';
 import {
   billingStatusOf,
   fulfillmentStatusOf,
+  lineInvariantViolation,
+  lineOutstanding,
   orderTotals,
 } from '../../domain/orderQuantities.js';
 import { ApiError } from '../../lib/ApiError.js';
@@ -11,6 +13,7 @@ import { nextDocNo } from '../../lib/numbering.js';
 import { paginate } from '../../lib/paginate.js';
 import { dayIn, dayToDate } from '../../lib/period.js';
 import { withTransaction } from '../../lib/withTransaction.js';
+import { ORDER_STATUSES } from '../../shared/enums.js';
 import { locationScopeOf } from '../../middleware/requireLocation.js';
 import { releaseReservation, reserveStock } from '../../services/stock.service.js';
 import { Dispatch } from '../dispatch/dispatch.model.js';
@@ -57,7 +60,12 @@ import type {
 } from '../../domain/orderStateMachine.js';
 import type { RequestActor } from '../../lib/requestUser.js';
 import type { OrderStatus } from '@shared/enums.js';
-import type { OrderQuote, PageMeta, WholesaleOrderPayload } from '@shared/types.js';
+import type {
+  OrderCounts,
+  OrderQuote,
+  PageMeta,
+  WholesaleOrderPayload,
+} from '@shared/types.js';
 import type { ClientSession, FilterQuery, UpdateQuery } from 'mongoose';
 
 // ─── Transitions ────────────────────────────────────────────────────────────────────────
@@ -727,4 +735,108 @@ export async function cancelOrder(
   });
   const [payload] = await serialize(actor, [result]);
   return payload!;
+}
+
+// ─── Short close and close (Day 26) ─────────────────────────────────────────────────────
+
+/**
+ * `POST /orders/:id/short-close` — "ship what we have, forget the rest" (§7). In one transaction:
+ *
+ *   cancel the order's open challans (drafts and packed — nothing in them has left) → release every
+ *   unit still reserved → `qtyCancelledBase += outstanding` on each line → PICKING / PACKED /
+ *   PARTIALLY_DISPATCHED → CLOSED.
+ *
+ * The state machine refuses it when nothing has been dispatched — that is a cancel — and requires a
+ * reason. Challans already on the road (DISPATCHED) are untouched: they shipped, and are billed.
+ * Once closed, the order is complete: fulfilment COMPLETE, and billed for exactly what shipped.
+ */
+export async function shortCloseOrder(
+  actor: RequestActor,
+  id: Types.ObjectId,
+  input: OrderReasonInput,
+): Promise<WholesaleOrderPayload> {
+  const result = await withTransaction(async (session) => {
+    const order = await WholesaleOrder.findOne({
+      _id: id,
+      orgId: actor.orgId,
+      isDeleted: false,
+    })
+      .session(session)
+      .lean();
+    if (!order) throw ApiError.notFound('Order');
+    assertCanSee(actor, order);
+
+    await Dispatch.updateMany(
+      { orgId: actor.orgId, orderId: id, status: { $in: ['DRAFT', 'PACKED'] } },
+      {
+        $set: {
+          status: 'CANCELLED',
+          cancelledAt: new Date(),
+          cancelledBy: actor.actorId,
+          cancelReason: `Order short-closed: ${input.reason}`,
+          updatedBy: actor.actorId,
+        },
+      },
+      { session },
+    );
+
+    const held = reservationsOf(order, order.lines, (l) => l.qtyReservedBase);
+    if (held.length > 0) await releaseReservation(session, { orgId: actor.orgId, lines: held });
+
+    const lines = order.lines.map((l) => ({
+      ...l,
+      qtyCancelledBase: l.qtyCancelledBase + lineOutstanding(l),
+      qtyReservedBase: 0,
+    }));
+    for (const l of lines) {
+      const bad = lineInvariantViolation(l);
+      if (bad) throw ApiError.internal(`Order line ${l.lineNo} after short close: ${bad}`);
+    }
+    await WholesaleOrder.updateOne(
+      { _id: id, orgId: actor.orgId },
+      { $set: { lines, updatedBy: actor.actorId } },
+      { session },
+    );
+    // Last: a refusal (nothing dispatched yet, wrong status, no reason) rolls all of it back.
+    return transitionOrder(actor, id, 'CLOSED', { session, reason: input.reason });
+  });
+  const [payload] = await serialize(actor, [result]);
+  return payload!;
+}
+
+/** `POST /orders/:id/close` — a delivered order is done. Nothing moves; the record is final. */
+export async function closeOrder(
+  actor: RequestActor,
+  id: Types.ObjectId,
+): Promise<WholesaleOrderPayload> {
+  const result = await withTransaction((session) =>
+    transitionOrder(actor, id, 'CLOSED', { session }),
+  );
+  const [payload] = await serialize(actor, [result]);
+  return payload!;
+}
+
+/**
+ * Orders per status, for the board's tabs — one `$group`, scoped like the list. Statuses with no
+ * orders are reported as 0, so the board can draw every tab without guessing.
+ */
+export async function orderCounts(
+  actor: RequestActor,
+  query: { locationId?: string },
+): Promise<OrderCounts> {
+  const match: FilterQuery<WholesaleOrderDoc> = { orgId: actor.orgId, isDeleted: false };
+  const scope = locationScopeOf(actor.user);
+  if (query.locationId) match.locationId = new Types.ObjectId(query.locationId);
+  else if (scope) match.locationId = { $in: scope.map((x) => new Types.ObjectId(x)) };
+
+  const rows = await WholesaleOrder.aggregate<{ _id: OrderStatus; n: number }>([
+    { $match: match },
+    { $group: { _id: '$status', n: { $sum: 1 } } },
+  ]);
+  const byStatus = Object.fromEntries(ORDER_STATUSES.map((st) => [st, 0])) as Record<
+    OrderStatus,
+    number
+  >;
+  for (const r of rows) byStatus[r._id] = r.n;
+  return { byStatus, total: rows.reduce((t, r) => t + r.n, 0) };
 }

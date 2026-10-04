@@ -16,6 +16,8 @@ export const listOrdersQuerySchema = listQuerySchema.extend({
 
 export type ListOrdersQuery = z.infer<typeof listOrdersQuerySchema>;
 
+export const orderCountsQuerySchema = z.object({ locationId: objectId.optional() });
+
 export {
   cancelOrderSchema,
   confirmOrderSchema,

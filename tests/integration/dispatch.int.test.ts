@@ -25,8 +25,11 @@ import { StockLedger } from '../../src/modules/stock/stockLedger.model.js';
 import { WholesaleOrder } from '../../src/modules/wholesaleOrder/wholesaleOrder.model.js';
 import {
   cancelOrder,
+  closeOrder,
   confirmOrder,
   createOrder,
+  orderCounts,
+  shortCloseOrder,
 } from '../../src/modules/wholesaleOrder/wholesaleOrder.service.js';
 import { postMovements } from '../../src/services/stock.service.js';
 
@@ -529,5 +532,123 @@ describe('delivery (Day 25): proof of delivery, and the order follows its last c
     expect(items.reduce((s, i) => s + i.grandTotalMinor, 0)).toBe(o.grandTotalMinor + 30_000);
     // The signature travels with one challan, never in a list.
     expect((await getDispatch(actor, oid(first.id))).receivedSignatureUrl).toBe(sig);
+  });
+});
+
+describe('short close (Day 26): ship what we have, forget the rest', () => {
+  beforeAll(fresh, 120_000);
+
+  it('releases the remaining reservations exactly and sets qtyCancelledBase to what was left', async () => {
+    const { f, actor, shelf, confirmed, order, balance } = w;
+    const o = await confirmed([
+      { productId: f.frameId, uomCode: 'DOZ', qty: 2 }, // 24
+      { productId: f.machineId, qty: 1 },
+    ]);
+    const [frameLine, machineLine] = [o.lines[0]!.id, o.lines[1]!.id];
+
+    // Half the frames ship; the rest are picked and packed on a second challan, then abandoned.
+    const first = await createDispatch(actor, {
+      orderId: o.id,
+      lines: [{ orderLineId: frameLine, qtyBase: 12 }],
+    });
+    await packDispatch(actor, oid(first.id));
+    await postDispatch(actor, oid(first.id));
+    const second = await createDispatch(actor, {
+      orderId: o.id,
+      lines: [
+        { orderLineId: frameLine, qtyBase: 12 },
+        { orderLineId: machineLine, qtyBase: 1, serials: ['ZZSN-2'] },
+      ],
+    });
+    await packDispatch(actor, oid(second.id));
+    expect(await shelf(f.frameId)).toEqual({ onHand: 48, reserved: 12 });
+    expect(await shelf(f.machineId)).toEqual({ onHand: 2, reserved: 1 });
+    const owed = await balance();
+    const stockRows = await StockLedger.countDocuments({ orgId: f.orgId });
+
+    // A reason is required.
+    expect((await refusal(shortCloseOrder(actor, oid(o.id), { reason: ' ' }))).status).toBe(
+      422,
+    );
+    expect((await order(o.id)).status).toBe('PACKED');
+
+    const closed = await shortCloseOrder(actor, oid(o.id), {
+      reason: 'ZZTEST dealer took what we had',
+    });
+
+    // ── The done-when ──
+    expect(closed).toMatchObject({
+      status: 'CLOSED',
+      fulfillmentStatus: 'COMPLETE',
+      billingStatus: 'BILLED',
+    });
+    expect(
+      closed.lines.map((l) => [
+        l.qtyBase,
+        l.qtyDispatchedBase,
+        l.qtyCancelledBase,
+        l.qtyReservedBase,
+        l.qtyOutstandingBase,
+      ]),
+    ).toEqual([
+      [24, 12, 12, 0, 0],
+      [1, 0, 1, 0, 0],
+    ]);
+    // Reservations released exactly; nothing physically moved; nobody billed again.
+    expect(await shelf(f.frameId)).toEqual({ onHand: 48, reserved: 0 });
+    expect(await shelf(f.machineId)).toEqual({ onHand: 2, reserved: 0 });
+    expect(await StockLedger.countDocuments({ orgId: f.orgId })).toBe(stockRows);
+    expect(await balance()).toBe(owed);
+
+    // The packed challan went with the remainder; the posted one stands.
+    const challans = await Dispatch.find({ orderId: oid(o.id) })
+      .sort({ createdAt: 1 })
+      .lean();
+    expect(challans.map((c) => c.status)).toEqual(['DISPATCHED', 'CANCELLED']);
+    expect(challans[1]!.cancelReason).toBe(
+      'Order short-closed: ZZTEST dealer took what we had',
+    );
+    expect(closed.statusHistory.at(-1)).toMatchObject({
+      from: 'PACKED',
+      to: 'CLOSED',
+      action: 'shortClose',
+      reason: 'ZZTEST dealer took what we had',
+    });
+    expect(closed.closedAt).not.toBeNull();
+    expect(closed.availableActions).toEqual([]);
+  });
+
+  it('is refused when nothing has shipped — that is a cancel — and leaves the reservation intact', async () => {
+    const { f, actor, shelf, confirmed, order } = w;
+    const o = await confirmed([{ productId: f.frameId, qty: 5 }]);
+    const d = await createDispatch(actor, { orderId: o.id });
+    await packDispatch(actor, oid(d.id));
+    const before = await shelf(f.frameId);
+
+    const err = await refusal(shortCloseOrder(actor, oid(o.id), { reason: 'ZZTEST' }));
+    expect([err.status, err.code]).toEqual([409, 'ILLEGAL_TRANSITION']);
+    expect(await shelf(f.frameId)).toEqual(before);
+    expect((await order(o.id)).lines[0]).toMatchObject({
+      qtyReservedBase: 5,
+      qtyCancelledBase: 0,
+    });
+    expect((await Dispatch.findById(d.id).lean())!.status).toBe('PACKED');
+    await cancelOrder(actor, oid(o.id), { reason: 'ZZTEST tidy' });
+  });
+
+  it('a delivered order is closed; the board counts by status', async () => {
+    const { f, actor, confirmed } = w;
+    const o = await confirmed([{ productId: f.frameId, qty: 2 }]);
+    const d = await createDispatch(actor, { orderId: o.id });
+    await packDispatch(actor, oid(d.id));
+    await postDispatch(actor, oid(d.id));
+    // Not delivered yet: DISPATCHED → CLOSED is not an edge.
+    expect((await refusal(closeOrder(actor, oid(o.id)))).status).toBe(409);
+    await deliverDispatch(actor, oid(d.id), { receivedByName: 'ZZ Rafiq' });
+    expect((await closeOrder(actor, oid(o.id))).status).toBe('CLOSED');
+
+    const counts = await orderCounts(actor, {});
+    expect(counts.byStatus).toMatchObject({ CLOSED: 2, CANCELLED: 1, DRAFT: 0 });
+    expect(counts.total).toBe(3);
   });
 });
