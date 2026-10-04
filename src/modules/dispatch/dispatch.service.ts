@@ -40,6 +40,7 @@ import type {
 import type {
   CancelDispatchInput,
   CreateDispatchInput,
+  DeliverDispatchInput,
   DispatchLineInput,
   UpdateDispatchInput,
 } from '@shared/dispatch.js';
@@ -205,7 +206,11 @@ function transportOf(input: CreateDispatchInput['transport']): DispatchDoc['tran
 
 // ─── Reads ──────────────────────────────────────────────────────────────────────────────
 
-async function serialize(actor: RequestActor, docs: DispatchDoc[]): Promise<DispatchPayload[]> {
+async function serialize(
+  actor: RequestActor,
+  docs: DispatchDoc[],
+  { withSignature = false } = {},
+): Promise<DispatchPayload[]> {
   const ids = (pick: (d: DispatchDoc) => (Types.ObjectId | null)[]) => [
     ...new Set(docs.flatMap(pick).filter(Boolean).map(String)),
   ];
@@ -220,7 +225,7 @@ async function serialize(actor: RequestActor, docs: DispatchDoc[]): Promise<Disp
       orgId: actor.orgId,
       _id: { $in: ids((d) => d.lines.map((l) => l.productId)) },
     })
-      .select('name sku trackingMode baseUom')
+      .select('name sku trackingMode baseUom packs')
       .lean(),
     Variant.find({
       orgId: actor.orgId,
@@ -239,12 +244,14 @@ async function serialize(actor: RequestActor, docs: DispatchDoc[]): Promise<Disp
       locationName: locationBy.get(String(d.locationId)),
       product: (id) => productBy.get(String(id)),
       variantSku: (id) => (id ? variantBy.get(String(id)) : undefined),
+      withSignature,
     }),
   );
 }
 
+/** One challan, in full — including the delivery signature a list leaves out. */
 const one = async (actor: RequestActor, doc: DispatchDoc) =>
-  (await serialize(actor, [doc]))[0]!;
+  (await serialize(actor, [doc], { withSignature: true }))[0]!;
 
 export async function listDispatches(
   actor: RequestActor,
@@ -720,4 +727,69 @@ export async function postDispatch(
     order: await getOrder(actor, posted.orderId),
     invoice: invoice ? await invoicePayload(invoice) : null,
   };
+}
+
+// ─── Deliver (Day 25) ───────────────────────────────────────────────────────────────────
+
+/**
+ * Proof of delivery: the dealer's person signed for this challan. DISPATCHED → DELIVERED, with
+ * who, when and (optionally) the signature. Nothing moves — the stock left and the invoice was
+ * raised when the challan was posted.
+ *
+ * When this was the order's last undelivered challan and nothing is left to ship, the order moves
+ * DISPATCHED → DELIVERED in the same transaction. A partly shipped order stays as it is: delivery
+ * of half an order is not delivery of the order.
+ */
+export async function deliverDispatch(
+  actor: RequestActor,
+  id: Types.ObjectId,
+  input: DeliverDispatchInput,
+): Promise<DispatchPayload> {
+  const doc = await withTransaction(async (session) => {
+    const d = await loadDispatch(actor, id, session);
+    if (d.status !== 'DISPATCHED') {
+      throw conflict(
+        d.status === 'DELIVERED'
+          ? `${d.docNo} is already delivered`
+          : `This challan is ${d.status} — only a posted challan can be delivered`,
+      );
+    }
+    const deliveredAt = input.deliveredAt ? new Date(input.deliveredAt) : new Date();
+    // To the minute: that is all a delivery form can say, and 12:05 is not "before" 12:05:37.
+    const postedMinute = d.dispatchedAt
+      ? Math.floor(d.dispatchedAt.getTime() / 60_000) * 60_000
+      : 0;
+    if (d.dispatchedAt && deliveredAt.getTime() < postedMinute) {
+      throw refuse('deliveredAt', 'Cannot be before the challan was dispatched');
+    }
+    const delivered = await Dispatch.findOneAndUpdate(
+      { _id: d._id, orgId: actor.orgId, status: 'DISPATCHED' },
+      {
+        $set: {
+          status: 'DELIVERED',
+          deliveredAt,
+          deliveredBy: actor.actorId,
+          receivedByName: input.receivedByName,
+          receivedPhone: input.receivedPhone ?? null,
+          receivedSignatureUrl: input.signatureDataUrl ?? null,
+          deliveryNote: input.note ?? null,
+          updatedBy: actor.actorId,
+        },
+      },
+      { new: true, session },
+    ).lean();
+    if (!delivered) throw conflict('The challan changed meanwhile — reload and try again');
+
+    const order = await loadOrder(actor, d.orderId, session);
+    const stillOnTheRoad = await Dispatch.countDocuments({
+      orgId: actor.orgId,
+      orderId: order._id,
+      status: 'DISPATCHED',
+    }).session(session);
+    if (order.status === 'DISPATCHED' && stillOnTheRoad === 0) {
+      await transitionOrder(actor, order._id, 'DELIVERED', { session });
+    }
+    return delivered;
+  });
+  return one(actor, doc);
 }

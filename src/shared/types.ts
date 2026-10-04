@@ -980,6 +980,11 @@ export interface InvoicePayload {
   balanceMinor: number;
   paymentStatus: 'UNPAID' | 'PARTIAL' | 'PAID' | 'OVERPAID';
   postedAt: string | null;
+  /** Wholesale (Day 25): the order's shipping charge and dealer-paid freight. */
+  shippingMinor: number;
+  paymentTermsDays: number;
+  orderId: string | null;
+  dispatchId: string | null;
 }
 
 export interface PaymentDocPayload {
@@ -1256,6 +1261,8 @@ export interface DispatchLinePayload {
   productName?: string;
   trackingMode?: TrackingMode;
   baseUom?: string;
+  /** The product's packs — the pick sheet reads 30 PCS as "2 DOZ 6 PCS". */
+  packs?: { code: string; factor: number }[];
   qtyBase: number;
   lotNo: string | null;
   serials: string[];
@@ -1293,6 +1300,12 @@ export interface DispatchPayload {
   packedAt: string | null;
   dispatchedAt: string | null;
   deliveredAt: string | null;
+  /** Proof of delivery (Day 25). */
+  receivedByName: string | null;
+  receivedPhone: string | null;
+  deliveryNote: string | null;
+  /** Only on a single challan, not in lists — it is an image. */
+  receivedSignatureUrl?: string | null;
   cancelledAt: string | null;
   cancelReason: string | null;
   createdAt: string;

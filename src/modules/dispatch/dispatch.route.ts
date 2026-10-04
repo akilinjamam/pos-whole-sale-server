@@ -9,6 +9,7 @@ import * as ctrl from './dispatch.controller.js';
 import {
   cancelDispatchSchema,
   createDispatchSchema,
+  deliverDispatchSchema,
   idParamSchema,
   listDispatchesQuerySchema,
   updateDispatchSchema,
@@ -64,6 +65,13 @@ router.post(
   requirePermission('dispatch:post'),
   validate({ params: idParamSchema }),
   ctrl.post,
+);
+router.post(
+  '/:id/deliver',
+  authenticate,
+  requirePermission('dispatch:deliver'),
+  validate({ params: idParamSchema, body: deliverDispatchSchema }),
+  ctrl.deliver,
 );
 router.post(
   '/:id/cancel',

@@ -6,6 +6,7 @@ import { DISPATCH_STATUSES } from '../../shared/enums.js';
 export {
   cancelDispatchSchema,
   createDispatchSchema,
+  deliverDispatchSchema,
   updateDispatchSchema,
 } from '../../shared/dispatch.js';
 

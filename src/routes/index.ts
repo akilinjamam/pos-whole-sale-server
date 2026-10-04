@@ -6,6 +6,7 @@ import brandRouter from '../modules/brand/brand.route.js';
 import categoryRouter from '../modules/category/category.route.js';
 import dispatchRouter from '../modules/dispatch/dispatch.route.js';
 import healthRouter from '../modules/health/health.route.js';
+import invoiceRouter from '../modules/invoice/invoice.route.js';
 import lotRouter from '../modules/lot/lot.route.js';
 import numberSeriesRouter from '../modules/numberSeries/numberSeries.route.js';
 import locationRouter from '../modules/location/location.route.js';
@@ -100,6 +101,9 @@ export const allRoutes: RouteEntry[] = [
   // Dispatch (Day 24): pick → pack → post. Posting moves stock, the order and — with
   // `invoiceOnDispatch` — raises the challan's invoice and ledger debit, in one transaction.
   { path: 'dispatches', route: dispatchRouter },
+
+  // Invoices (Day 25): read-only, for printing. Raised only by a counter sale or a posted challan.
+  { path: 'invoices', route: invoiceRouter },
 ];
 
 /** Paths that skip authentication, as full mount prefixes. */

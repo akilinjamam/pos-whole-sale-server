@@ -8,11 +8,14 @@ import { Dispatch } from '../../src/modules/dispatch/dispatch.model.js';
 import {
   cancelDispatch,
   createDispatch,
+  deliverDispatch,
+  getDispatch,
   packDispatch,
   postDispatch,
   updateDispatch,
 } from '../../src/modules/dispatch/dispatch.service.js';
 import { Invoice } from '../../src/modules/invoice/invoice.model.js';
+import { getInvoice, listInvoices } from '../../src/modules/invoice/invoice.service.js';
 import { LedgerEntry } from '../../src/modules/ledger/ledgerEntry.model.js';
 import { Org } from '../../src/modules/org/org.model.js';
 import { Party } from '../../src/modules/party/party.model.js';
@@ -428,5 +431,103 @@ describe('concurrency: two dispatches, one set of units — exactly one wins', (
       refId: { $in: [oid(a.id), oid(b.id)] },
     });
     expect(sold).toBe(1);
+  });
+});
+
+describe('delivery (Day 25): proof of delivery, and the order follows its last challan', () => {
+  beforeAll(fresh, 120_000);
+
+  const sig =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+
+  it('partial: the order waits for its last challan; then both delivered → order DELIVERED', async () => {
+    const { f, actor, confirmed, order } = w;
+    const o = await confirmed([{ productId: f.frameId, uomCode: 'DOZ', qty: 2 }]);
+    const line = o.lines[0]!.id;
+
+    const first = await createDispatch(actor, {
+      orderId: o.id,
+      lines: [{ orderLineId: line, qtyBase: 18 }],
+      transport: {
+        mode: 'OWN',
+        vehicleNo: 'DHAKA-METRO-GA-11',
+        freightMinor: 30_000,
+        freightPaidBy: 'DEALER',
+      },
+    });
+    // Delivering before it has left is refused.
+    expect(
+      (await refusal(deliverDispatch(actor, oid(first.id), { receivedByName: 'ZZ Rafiq' })))
+        .status,
+    ).toBe(409);
+    await packDispatch(actor, oid(first.id));
+    const posted = await postDispatch(actor, oid(first.id));
+
+    // 18 PCS of a dozen-priced line: invoiced in pieces, with dealer-paid freight on top.
+    const inv = await getInvoice(actor, oid(posted.invoice!.id));
+    expect(inv).toMatchObject({
+      channel: 'WHOLESALE',
+      dispatchId: first.id,
+      orderId: o.id,
+      shippingMinor: 30_000,
+      paymentTermsDays: 30,
+    });
+    expect(inv.lines[0]).toMatchObject({
+      uomCode: 'PCS',
+      uomQty: 18,
+      unitPriceMinor: 6_000,
+      lineTotalMinor: 108_000,
+    });
+    expect(inv.grandTotalMinor).toBe(108_000 + 30_000);
+
+    // A delivery time before the challan left is refused; then delivered, with a signature.
+    const tooEarly = await refusal(
+      deliverDispatch(actor, oid(first.id), {
+        receivedByName: 'ZZ Rafiq',
+        deliveredAt: new Date(Date.now() - 86_400_000).toISOString(),
+      }),
+    );
+    expect(tooEarly.status).toBe(422);
+    const d1 = await deliverDispatch(actor, oid(first.id), {
+      receivedByName: 'ZZ Rafiq',
+      receivedPhone: '01700000000',
+      signatureDataUrl: sig,
+    });
+    expect(d1).toMatchObject({
+      status: 'DELIVERED',
+      receivedByName: 'ZZ Rafiq',
+      receivedSignatureUrl: sig,
+    });
+    expect((await order(o.id)).status).toBe('PARTIALLY_DISPATCHED');
+    expect(
+      (await refusal(deliverDispatch(actor, oid(first.id), { receivedByName: 'ZZ Rafiq' })))
+        .status,
+    ).toBe(409);
+
+    // The rest.
+    const rest = await createDispatch(actor, { orderId: o.id });
+    await packDispatch(actor, oid(rest.id));
+    await postDispatch(actor, oid(rest.id));
+    expect((await order(o.id)).status).toBe('DISPATCHED');
+    await deliverDispatch(actor, oid(rest.id), { receivedByName: 'ZZ Rafiq' });
+    const done = await order(o.id);
+    expect(done.status).toBe('DELIVERED');
+    expect(done.statusHistory.at(-1)).toMatchObject({
+      from: 'DISPATCHED',
+      to: 'DELIVERED',
+      action: 'deliver',
+    });
+
+    // Both invoices, found by order; together they are the order plus the freight.
+    const { items } = await listInvoices(actor, {
+      orderId: o.id,
+      page: 1,
+      limit: 25,
+      order: 'asc',
+    });
+    expect(items).toHaveLength(2);
+    expect(items.reduce((s, i) => s + i.grandTotalMinor, 0)).toBe(o.grandTotalMinor + 30_000);
+    // The signature travels with one challan, never in a list.
+    expect((await getDispatch(actor, oid(first.id))).receivedSignatureUrl).toBe(sig);
   });
 });

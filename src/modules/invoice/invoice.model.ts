@@ -252,5 +252,9 @@ export function toInvoicePayload(doc: InvoiceDoc): InvoicePayload {
     balanceMinor: doc.balanceMinor,
     paymentStatus: doc.paymentStatus,
     postedAt: doc.postedAt ? doc.postedAt.toISOString() : null,
+    shippingMinor: doc.shippingMinor ?? 0,
+    paymentTermsDays: doc.paymentTermsDays ?? 0,
+    orderId: doc.orderId ? String(doc.orderId) : null,
+    dispatchId: doc.dispatchId ? String(doc.dispatchId) : null,
   };
 }

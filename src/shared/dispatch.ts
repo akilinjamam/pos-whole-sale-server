@@ -78,8 +78,36 @@ export const cancelDispatchSchema = z
   .object({ reason: z.string().trim().min(3, 'Say why, in a few words').max(300) })
   .strict();
 
+/**
+ * Proof of delivery (Day 25): who signed for it, when, and — when captured on a phone or tablet at
+ * the dealer's door — their signature, as a small PNG data URL. A paper challan signed and brought
+ * back is recorded with the name alone.
+ */
+export const MAX_SIGNATURE_BYTES = 200_000;
+
+export const deliverDispatchSchema = z
+  .object({
+    receivedByName: z.string().trim().min(2, 'Who received it?').max(80),
+    receivedPhone: text(20),
+    /** When it was handed over. Default: now. Never in the future. */
+    deliveredAt: z
+      .string()
+      .datetime({ offset: true })
+      .refine((v) => new Date(v).getTime() <= Date.now() + 60_000, 'Cannot be in the future')
+      .optional(),
+    signatureDataUrl: z
+      .string()
+      .regex(/^data:image\/png;base64,[A-Za-z0-9+/=]+$/, 'Must be a PNG image')
+      .max(MAX_SIGNATURE_BYTES, 'Signature image is too large')
+      .nullable()
+      .optional(),
+    note: text(300),
+  })
+  .strict();
+
 export type DispatchLineInput = z.infer<typeof dispatchLineInputSchema>;
 export type TransportInput = z.infer<typeof transportSchema>;
 export type CreateDispatchInput = z.infer<typeof createDispatchSchema>;
 export type UpdateDispatchInput = z.infer<typeof updateDispatchSchema>;
 export type CancelDispatchInput = z.infer<typeof cancelDispatchSchema>;
+export type DeliverDispatchInput = z.infer<typeof deliverDispatchSchema>;

@@ -66,7 +66,11 @@ export interface DispatchDoc {
   dispatchedBy: Types.ObjectId | null;
   deliveredAt: Date | null;
   receivedByName: string | null;
+  receivedPhone: string | null;
+  /** A PNG data URL captured at the door, or null when the paper challan was signed instead. */
   receivedSignatureUrl: string | null;
+  deliveryNote: string | null;
+  deliveredBy: Types.ObjectId | null;
   cancelledAt: Date | null;
   cancelledBy: Types.ObjectId | null;
   cancelReason: string | null;
@@ -135,7 +139,10 @@ const dispatchSchema = new Schema<DispatchDoc>(
     dispatchedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
     deliveredAt: { type: Date, default: null },
     receivedByName: { type: String, trim: true, default: null },
-    receivedSignatureUrl: { type: String, trim: true, default: null },
+    receivedPhone: { type: String, trim: true, default: null },
+    receivedSignatureUrl: { type: String, default: null },
+    deliveryNote: { type: String, trim: true, default: null },
+    deliveredBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
     cancelledAt: { type: Date, default: null },
     cancelledBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
     cancelReason: { type: String, trim: true, default: null },
@@ -162,10 +169,18 @@ export const Dispatch: Model<DispatchDoc> = model<DispatchDoc>('Dispatch', dispa
 export interface DispatchNames {
   dealerName?: string;
   locationName?: string;
-  product?: (
-    id: Types.ObjectId,
-  ) => { name: string; sku: string; trackingMode: TrackingMode; baseUom: string } | undefined;
+  product?: (id: Types.ObjectId) =>
+    | {
+        name: string;
+        sku: string;
+        trackingMode: TrackingMode;
+        baseUom: string;
+        packs?: { code: string; factor: number }[];
+      }
+    | undefined;
   variantSku?: (id: Types.ObjectId | null) => string | undefined;
+  /** The signature is an image: sent for one challan, never in a list. */
+  withSignature?: boolean;
 }
 
 const iso = (d: Date | null | undefined) => (d ? d.toISOString() : null);
@@ -195,6 +210,7 @@ export function toDispatchPayload(
         productName: p?.name,
         trackingMode: p?.trackingMode,
         baseUom: p?.baseUom,
+        packs: p?.packs?.map((k) => ({ code: k.code, factor: k.factor })),
         qtyBase: l.qtyBase,
         lotNo: l.lotNo,
         serials: l.serials ?? [],
@@ -222,6 +238,10 @@ export function toDispatchPayload(
     packedAt: iso(doc.packedAt),
     dispatchedAt: iso(doc.dispatchedAt),
     deliveredAt: iso(doc.deliveredAt),
+    receivedByName: doc.receivedByName ?? null,
+    receivedPhone: doc.receivedPhone ?? null,
+    deliveryNote: doc.deliveryNote ?? null,
+    ...(names.withSignature ? { receivedSignatureUrl: doc.receivedSignatureUrl ?? null } : {}),
     cancelledAt: iso(doc.cancelledAt),
     cancelReason: doc.cancelReason,
     createdAt: doc.createdAt.toISOString(),
