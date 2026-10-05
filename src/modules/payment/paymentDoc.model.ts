@@ -51,6 +51,8 @@ export interface PaymentDocDoc {
   mfs: { provider: MfsProvider; trxId: string; senderNumber: string | null } | null;
   collectedByUserId: Types.ObjectId | null;
   status: 'POSTED' | 'CANCELLED';
+  /** A bank transfer reference, a deposit slip number (Day 28). */
+  reference: string | null;
   narration: string | null;
   createdBy: Types.ObjectId | null;
   updatedBy: Types.ObjectId | null;
@@ -111,6 +113,7 @@ const paymentDocSchema = new Schema<PaymentDocDoc>(
     mfs: { type: mfsSchema, default: null },
     collectedByUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
     status: { type: String, enum: ['POSTED', 'CANCELLED'], default: 'POSTED' },
+    reference: { type: String, trim: true, default: null },
     narration: { type: String, trim: true, default: null },
   },
   { collection: 'payment_docs' },
@@ -124,6 +127,11 @@ paymentDocSchema.index(
 );
 // A party's receipts and payments by date — statements, unapplied receipts.
 paymentDocSchema.index({ orgId: 1, partyId: 1, paidAt: -1 });
+// Unapplied receipts (Day 29): a party's advances, found without scanning every receipt.
+paymentDocSchema.index(
+  { orgId: 1, partyId: 1, unallocatedMinor: 1 },
+  { partialFilterExpression: { unallocatedMinor: { $gt: 0 } } },
+);
 // Cheques awaiting deposit or clearing (Day 30).
 paymentDocSchema.index(
   { orgId: 1, 'instrument.status': 1, 'instrument.chequeDate': 1 },

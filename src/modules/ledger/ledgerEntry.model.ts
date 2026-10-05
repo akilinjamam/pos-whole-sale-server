@@ -14,8 +14,8 @@ import type { Model, Types } from 'mongoose';
  * `Party.currentBalanceMinor` is the cache, `$inc`'d in the same transaction as every insert by
  * `partyLedger.service` — the only writer.
  *
- * Day 18 needs only the writer (counter credit sales). Opening balances, statements and the
- * `ledger:reconcile` job arrive on Day 27.
+ * Written by counter credit sales (Day 18), posted challans (Day 24) and the opening-balance import
+ * (Day 27); read and reconciled by `modules/ledger` (Day 27). The statement view is Day 29.
  */
 export interface LedgerEntryDoc {
   _id: Types.ObjectId;

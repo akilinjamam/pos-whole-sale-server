@@ -23,6 +23,10 @@ import type {
   CreditCheckStatus,
   DispatchStatus,
   FulfillmentStatus,
+  LedgerDocType,
+  PaymentMethod,
+  PaymentStatus,
+  SalesChannel,
   OrderStatus,
   DocumentStatus,
   TransferStatus,
@@ -1323,4 +1327,137 @@ export interface DispatchPostResult {
   dispatch: DispatchPayload;
   order: WholesaleOrderPayload;
   invoice: InvoicePayload | null;
+}
+
+// ─── Party ledger (Day 27) ──────────────────────────────────────────────────────────────
+
+export interface LedgerEntryPayload {
+  id: string;
+  partyId: string;
+  partyName?: string;
+  partyCode?: string;
+  postedAt: string;
+  docType: LedgerDocType;
+  refType: string;
+  refId: string | null;
+  refDocNo: string | null;
+  /** Debit: the party owes more. Credit: owes less. Exactly one is non-zero. */
+  debitMinor: number;
+  creditMinor: number;
+  narration: string | null;
+  dueDate: string | null;
+  reversalOfId: string | null;
+  createdAt: string;
+}
+
+export interface OpeningBalanceRowResult {
+  line: number;
+  code: string;
+  status: 'POST' | 'ERROR';
+  errors: string[];
+  partyId?: string;
+  partyName?: string;
+  roles?: PartyRole[];
+  /** Which side the row posts to — shown in the dry run before anything is committed. */
+  side?: 'DEBIT' | 'CREDIT';
+  amountMinor?: number;
+}
+
+export interface OpeningBalanceImportResult {
+  dryRun: boolean;
+  asOf: string;
+  rows: OpeningBalanceRowResult[];
+  posted: number;
+  failed: number;
+  /** Σ of the rows that would post (dry run) or did: debits − credits. */
+  netMinor: number;
+  /** Shared by every entry of a committed import, so it can be found as one. */
+  refId: string | null;
+  refDocNo: string | null;
+}
+
+export interface LedgerDriftPayload {
+  partyId: string;
+  code: string;
+  name: string;
+  /** Σ (debit − credit) of the party's entries — the truth. */
+  expected: number;
+  /** `Party.currentBalanceMinor` — the cache. */
+  actual: number;
+  /** actual − expected: positive means the cache says they owe more than the ledger does. */
+  drift: number;
+}
+
+export interface LedgerReconcileResult {
+  checkedAt: string;
+  tookMs: number;
+  counts: { parties: number; partiesWithEntries: number; entries: number };
+  drift: LedgerDriftPayload[];
+  /** True when every party's cached balance equals the sum of its entries. */
+  clean: boolean;
+}
+
+// ─── Receipts and allocation (Day 28) ───────────────────────────────────────────────────
+
+export interface ReceiptAllocationPayload {
+  invoiceId: string;
+  docNo: string;
+  amountMinor: number;
+  allocatedAt: string;
+}
+
+export interface ReceiptPayload {
+  id: string;
+  docNo: string;
+  partyId: string;
+  partyName?: string;
+  partyCode?: string;
+  paidAt: string;
+  method: PaymentMethod;
+  amountMinor: number;
+  allocatedMinor: number;
+  /** An advance: received, not yet set against any invoice. */
+  unallocatedMinor: number;
+  allocations: ReceiptAllocationPayload[];
+  reference: string | null;
+  mfs: { provider: string; trxId: string; senderNumber: string | null } | null;
+  narration: string | null;
+  status: 'POSTED' | 'CANCELLED';
+  collectedByUserId: string | null;
+  createdAt: string;
+}
+
+/** An invoice the party still owes on — a row in the allocation grid. */
+export interface OpenInvoicePayload {
+  id: string;
+  docNo: string;
+  channel: SalesChannel;
+  invoiceDate: string;
+  dueDate: string | null;
+  grandTotalMinor: number;
+  paidMinor: number;
+  creditedMinor: number;
+  balanceMinor: number;
+  /** Days past due today; 0 or negative when not yet due. Null without a due date. */
+  daysOverdue: number | null;
+}
+
+/** `GET /payments/allocation-preview` — the FIFO proposal, as editable rows. */
+export interface AllocationPreview {
+  partyId: string;
+  amountMinor: number;
+  openInvoices: OpenInvoicePayload[];
+  totalOpenMinor: number;
+  allocations: { invoiceId: string; docNo: string; amountMinor: number }[];
+  allocatedMinor: number;
+  unallocatedMinor: number;
+  /** Advances the party already has sitting on earlier receipts. */
+  existingAdvanceMinor: number;
+}
+
+/** What posting (or allocating) a receipt did. */
+export interface ReceiptResult {
+  receipt: ReceiptPayload;
+  /** Each invoice the receipt touched, as it stands now. */
+  invoices: { id: string; docNo: string; balanceMinor: number; paymentStatus: PaymentStatus }[];
 }

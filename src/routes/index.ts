@@ -7,10 +7,12 @@ import categoryRouter from '../modules/category/category.route.js';
 import dispatchRouter from '../modules/dispatch/dispatch.route.js';
 import healthRouter from '../modules/health/health.route.js';
 import invoiceRouter from '../modules/invoice/invoice.route.js';
+import ledgerRouter from '../modules/ledger/ledger.route.js';
 import lotRouter from '../modules/lot/lot.route.js';
 import numberSeriesRouter from '../modules/numberSeries/numberSeries.route.js';
 import locationRouter from '../modules/location/location.route.js';
 import orgRouter from '../modules/org/org.route.js';
+import paymentRouter from '../modules/payment/payment.route.js';
 import posRouter from '../modules/pos/pos.route.js';
 import { customerRouter, dealerRouter, supplierRouter } from '../modules/party/party.route.js';
 import priceListRouter from '../modules/priceList/priceList.route.js';
@@ -104,6 +106,14 @@ export const allRoutes: RouteEntry[] = [
 
   // Invoices (Day 25): read-only, for printing. Raised only by a counter sale or a posted challan.
   { path: 'invoices', route: invoiceRouter },
+
+  // The party ledger (Day 27): opening balances at cutover, the entries, and reconcile. Entries are
+  // written only by the documents that post them, through `partyLedger.service`.
+  { path: 'ledger', route: ledgerRouter },
+
+  // Receipts and allocation (Day 28): money in, set against invoices oldest-due-first or as
+  // chosen; the rest held as an advance. One ledger credit per receipt.
+  { path: 'payments', route: paymentRouter },
 ];
 
 /** Paths that skip authentication, as full mount prefixes. */
