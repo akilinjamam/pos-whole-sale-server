@@ -2,13 +2,16 @@ import { Types } from 'mongoose';
 
 import { compareCounts } from '../../domain/reconcile.js';
 import { ApiError } from '../../lib/ApiError.js';
+import { nextDocNo } from '../../lib/numbering.js';
 import { paginate } from '../../lib/paginate.js';
 import { dayIn, startOfDayIn } from '../../lib/period.js';
 import { withTransaction } from '../../lib/withTransaction.js';
 import { postLedgerEntries } from '../../services/partyLedger.service.js';
 import { openingSide } from '../../shared/ledger.js';
+import { Invoice } from '../invoice/invoice.model.js';
 import { Org } from '../org/org.model.js';
 import { Party } from '../party/party.model.js';
+import { PaymentDoc } from '../payment/paymentDoc.model.js';
 
 import { LedgerEntry } from './ledgerEntry.model.js';
 
@@ -16,13 +19,14 @@ import type { LedgerEntryDoc } from './ledgerEntry.model.js';
 import type { ListLedgerQuery } from './ledger.schema.js';
 import type { RequestActor } from '../../lib/requestUser.js';
 import type { LedgerEntryInput } from '../../services/partyLedger.service.js';
-import type { OpeningBalanceImportInput } from '@shared/ledger.js';
+import type { OpeningBalanceImportInput, StatementQuery } from '@shared/ledger.js';
 import type {
   LedgerEntryPayload,
   LedgerReconcileResult,
   OpeningBalanceImportResult,
   OpeningBalanceRowResult,
   PageMeta,
+  StatementPayload,
 } from '@shared/types.js';
 import type { FilterQuery } from 'mongoose';
 
@@ -64,7 +68,7 @@ export async function importOpeningBalances(
 
   const codes = [...new Set(input.rows.map((r) => r.code))];
   const parties = await Party.find({ orgId: actor.orgId, code: { $in: codes } })
-    .select('code name displayName roles isActive')
+    .select('code name displayName roles isActive phone tin bin addresses')
     .lean();
   const byCode = new Map(parties.map((p) => [p.code, p]));
   const opened = new Set(
@@ -107,6 +111,7 @@ export async function importOpeningBalances(
           }
         : {}),
       side: r.amountMinor > 0 ? 'DEBIT' : 'CREDIT',
+      ...(party ? { creates: openingKind(party.roles, r.amountMinor) } : {}),
       amountMinor: r.amountMinor,
     };
   });
@@ -132,21 +137,8 @@ export async function importOpeningBalances(
 
   const refId = new Types.ObjectId();
   const refDocNo = `OPEN-BAL-${asOf}`;
-  const entries: LedgerEntryInput[] = good.map((r) => {
-    const party = byCode.get(r.code)!;
-    return {
-      partyId: party._id,
-      docType: 'OPENING',
-      refType: 'OPENING_BALANCE',
-      refId,
-      refDocNo,
-      ...openingSide(r.amountMinor),
-      narration: r.reference ? `Opening balance — ${r.reference}` : 'Opening balance',
-      dueDate: r.amountMinor > 0 ? startOfDayIn(r.dueDate ?? asOf, zone) : null,
-    };
-  });
 
-  await withTransaction(async (session) => {
+  const docNos = await withTransaction(async (session) => {
     // Re-checked inside the transaction, so two people loading the same file at once cannot both
     // succeed. Under snapshot reads neither can see the other's uncommitted entries — what
     // serialises them is that both write the same `Party` documents (the balance `$inc`): the
@@ -155,7 +147,7 @@ export async function importOpeningBalances(
     const already = await LedgerEntry.countDocuments({
       orgId: actor.orgId,
       docType: 'OPENING',
-      partyId: { $in: entries.map((e) => e.partyId) },
+      partyId: { $in: good.map((r) => byCode.get(r.code)!._id) },
     }).session(session);
     if (already > 0) {
       throw ApiError.conflict(
@@ -163,6 +155,107 @@ export async function importOpeningBalances(
         'Opening balances were loaded for some of these parties meanwhile — run the dry run again',
       );
     }
+
+    // Each row's document, then its one OPENING ledger entry pointing at it. The document does
+    // not post to the ledger itself — the opening entry *is* its posting, so nothing is counted
+    // twice.
+    const entries: LedgerEntryInput[] = [];
+    const numbers = new Map<number, string>();
+    for (const r of good) {
+      const party = byCode.get(r.code)!;
+      const narration = r.reference ? `Opening balance — ${r.reference}` : 'Opening balance';
+      const kind = openingKind(party.roles, r.amountMinor);
+      const base = {
+        partyId: party._id,
+        docType: 'OPENING' as const,
+        ...openingSide(r.amountMinor),
+        narration,
+      };
+
+      if (kind === 'INVOICE') {
+        // An old receivable as an invoice: receipts can pay it off (Day 28) and ageing can age it
+        // (Day 30), from the old due date — exactly like any invoice raised after cutover.
+        const dueDate = startOfDayIn(r.dueDate ?? asOf, zone);
+        const docNo = await nextDocNo(session, actor.orgId, 'OB', postedAt);
+        const [inv] = await Invoice.create(
+          [
+            {
+              orgId: actor.orgId,
+              docNo,
+              series: 'OB',
+              channel: 'WHOLESALE',
+              partyId: party._id,
+              partySnapshot: {
+                name: party.displayName ?? party.name,
+                phone: party.phone ?? null,
+                address: addressLine(party.addresses),
+                tin: party.tin ?? null,
+                bin: party.bin ?? null,
+              },
+              locationId: null,
+              invoiceDate: postedAt,
+              dueDate,
+              status: 'POSTED',
+              lines: [],
+              subtotalMinor: r.amountMinor,
+              grandTotalMinor: r.amountMinor,
+              paidMinor: 0,
+              creditedMinor: 0,
+              balanceMinor: r.amountMinor,
+              paymentStatus: 'UNPAID',
+              note: narration,
+              postedAt,
+              postedBy: actor.actorId,
+              createdBy: actor.actorId,
+              updatedBy: actor.actorId,
+            },
+          ],
+          { session },
+        );
+        entries.push({
+          ...base,
+          refType: 'INVOICE',
+          refId: inv!._id,
+          refDocNo: docNo,
+          dueDate,
+        });
+        numbers.set(r.line, docNo);
+      } else if (kind === 'ADVANCE') {
+        // A dealer's money we held at cutover: an opening receipt, wholly unallocated, so it can
+        // be set against their next invoices like any other advance.
+        const docNo = await nextDocNo(session, actor.orgId, 'RCPT', postedAt);
+        const [pay] = await PaymentDoc.create(
+          [
+            {
+              orgId: actor.orgId,
+              docNo,
+              series: 'RCPT',
+              direction: 'IN',
+              partyId: party._id,
+              paidAt: postedAt,
+              method: 'ADJUSTMENT',
+              amountMinor: -r.amountMinor,
+              allocatedMinor: 0,
+              unallocatedMinor: -r.amountMinor,
+              allocations: [],
+              reference: r.reference ?? null,
+              narration: `Opening advance${r.reference ? ` — ${r.reference}` : ''}`,
+              collectedByUserId: actor.actorId,
+              createdBy: actor.actorId,
+              updatedBy: actor.actorId,
+            },
+          ],
+          { session },
+        );
+        entries.push({ ...base, refType: 'PAYMENT', refId: pay!._id, refDocNo: docNo });
+        numbers.set(r.line, docNo);
+      } else {
+        // What we owe a supplier: a ledger balance for now. Supplier bills — and the opening ones
+        // with them — arrive with purchasing (Day 35).
+        entries.push({ ...base, refType: 'OPENING_BALANCE', refId, refDocNo });
+      }
+    }
+
     await postLedgerEntries(session, {
       orgId: actor.orgId,
       entries,
@@ -177,8 +270,41 @@ export async function importOpeningBalances(
         { session },
       );
     }
+    return numbers;
   });
+
+  for (const row of rows) {
+    const docNo = docNos.get(row.line);
+    if (docNo) row.docNo = docNo;
+  }
   return result(refId, refDocNo);
+}
+
+/**
+ * What an opening row becomes: owed to us → an opening invoice; owed by us to a supplier → a
+ * ledger balance; owed by us to anyone else (a dealer's prepayment) → an opening advance.
+ * A party that is both dealer and supplier with a negative balance is taken as a supplier
+ * payable — the common case in this trade, and the dry run says so before anything posts.
+ */
+export function openingKind(
+  roles: readonly string[],
+  amountMinor: number,
+): 'INVOICE' | 'ADVANCE' | 'PAYABLE' {
+  if (amountMinor > 0) return 'INVOICE';
+  return roles.includes('SUPPLIER') ? 'PAYABLE' : 'ADVANCE';
+}
+
+/** A party's default billing address, as one printable line. */
+function addressLine(
+  addresses: readonly {
+    line1: string;
+    line2: string | null;
+    city: string | null;
+    isDefaultBilling: boolean;
+  }[],
+): string | null {
+  const a = addresses.find((x) => x.isDefaultBilling) ?? addresses[0];
+  return a ? [a.line1, a.line2, a.city].filter(Boolean).join(', ') : null;
 }
 
 // ─── Reading ────────────────────────────────────────────────────────────────────────────
@@ -296,5 +422,103 @@ export async function reconcileLedger(orgId: Types.ObjectId): Promise<LedgerReco
     },
     drift,
     clean: drift.length === 0,
+  };
+}
+
+// ─── Statement (Day 29) ─────────────────────────────────────────────────────────────────
+
+/**
+ * `GET /ledger/statement` — a party's account for a period, as their books would show it:
+ * balance brought forward, every entry with the balance after it, balance carried forward.
+ *
+ * The running balance is computed **at read time** by `$setWindowFields` over *all* the party's
+ * entries in posting order (`postedAt`, then `_id` for entries at the same instant), and only then
+ * narrowed to the period — so a back-dated entry, posted today but dated last week, takes its place
+ * in the sequence and every later balance moves with it. A stored running balance could not do
+ * that; it would be wrong the moment the back-dated entry was posted (§8).
+ */
+export async function partyStatement(
+  actor: RequestActor,
+  query: StatementQuery,
+): Promise<StatementPayload> {
+  const partyId = new Types.ObjectId(query.partyId);
+  const party = await Party.findOne({ _id: partyId, orgId: actor.orgId }).lean();
+  if (!party) throw ApiError.notFound('Party');
+
+  const zone = await orgZone(actor.orgId);
+  const today = dayIn(new Date(), zone);
+  const to = query.to ?? today;
+  const from = query.from ?? `${to.slice(0, 8)}01`;
+  const start = startOfDayIn(from, zone);
+  const end = new Date(startOfDayIn(to, zone).getTime() + 86_400_000);
+
+  const [rows, before] = await Promise.all([
+    LedgerEntry.aggregate<LedgerEntryDoc & { runningMinor: number }>([
+      { $match: { orgId: actor.orgId, partyId } },
+      {
+        $setWindowFields: {
+          partitionBy: '$partyId',
+          sortBy: { postedAt: 1, _id: 1 },
+          output: {
+            runningMinor: {
+              $sum: { $subtract: ['$debitMinor', '$creditMinor'] },
+              window: { documents: ['unbounded', 'current'] },
+            },
+          },
+        },
+      },
+      { $match: { postedAt: { $gte: start, $lt: end } } },
+      { $sort: { postedAt: 1, _id: 1 } },
+    ]),
+    LedgerEntry.aggregate<{ n: number }>([
+      { $match: { orgId: actor.orgId, partyId, postedAt: { $lt: start } } },
+      { $group: { _id: null, n: { $sum: { $subtract: ['$debitMinor', '$creditMinor'] } } } },
+    ]),
+  ]);
+
+  const openingBalanceMinor = before[0]?.n ?? 0;
+  const debitMinor = rows.reduce((t, r) => t + r.debitMinor, 0);
+  const creditMinor = rows.reduce((t, r) => t + r.creditMinor, 0);
+  const closingBalanceMinor = openingBalanceMinor + debitMinor - creditMinor;
+  // The window and the totals are two independent computations of the same number. If they ever
+  // disagree, the statement is wrong — refuse to print it rather than print it wrong.
+  const lastRunning = rows.at(-1)?.runningMinor ?? openingBalanceMinor;
+  if (lastRunning !== closingBalanceMinor) {
+    throw ApiError.internal('The statement does not add up — run ledger reconcile');
+  }
+
+  const address = party.addresses.find((a) => a.isDefaultBilling) ?? party.addresses[0];
+  return {
+    party: {
+      id: String(party._id),
+      code: party.code,
+      name: party.displayName ?? party.name,
+      phone: party.phone ?? null,
+      address: address
+        ? [address.line1, address.line2, address.city].filter(Boolean).join(', ')
+        : null,
+      creditLimitMinor: party.dealer?.creditLimitMinor ?? null,
+      paymentTermsDays: party.dealer?.paymentTermsDays ?? null,
+    },
+    from,
+    to,
+    openingBalanceMinor,
+    lines: rows.map((r) => ({
+      id: String(r._id),
+      postedAt: r.postedAt.toISOString(),
+      docType: r.docType,
+      refType: r.refType,
+      refId: r.refId ? String(r.refId) : null,
+      refDocNo: r.refDocNo,
+      narration: r.narration,
+      dueDate: r.dueDate ? r.dueDate.toISOString() : null,
+      debitMinor: r.debitMinor,
+      creditMinor: r.creditMinor,
+      runningMinor: r.runningMinor,
+    })),
+    totals: { debitMinor, creditMinor },
+    closingBalanceMinor,
+    currentBalanceMinor: party.currentBalanceMinor,
+    generatedAt: new Date().toISOString(),
   };
 }

@@ -288,6 +288,7 @@ export const DOC_SERIES = [
   'TRF', // stock transfer
   'DLR', // party code
   'CNT', // stock count
+  'OB', // opening-balance invoice — an old receivable loaded at cutover (Day 28)
 ] as const;
 export type DocSeries = Member<typeof DOC_SERIES>;
 

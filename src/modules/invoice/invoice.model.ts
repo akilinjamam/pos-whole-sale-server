@@ -54,7 +54,8 @@ export interface InvoiceDoc {
   orgId: Types.ObjectId;
   /** Null while a draft. Allocated from `series` at post time. */
   docNo: string | null;
-  series: 'WS' | 'POS';
+  /** `OB`: an opening-balance invoice — what a dealer owed at cutover, from the old books. */
+  series: 'WS' | 'POS' | 'OB';
   channel: SalesChannel;
   partyId: Types.ObjectId | null;
   walkInName: string | null;
@@ -66,7 +67,8 @@ export interface InvoiceDoc {
     tin: string | null;
     bin: string | null;
   } | null;
-  locationId: Types.ObjectId;
+  /** Null only for an opening-balance invoice: an old debt belongs to the account, not a shop. */
+  locationId: Types.ObjectId | null;
   orderId: Types.ObjectId | null;
   dispatchId: Types.ObjectId | null;
   posSessionId: Types.ObjectId | null;
@@ -139,13 +141,20 @@ const invoiceSchema = new Schema<InvoiceDoc>(
   {
     ...auditableFields,
     docNo: { type: String, default: null },
-    series: { type: String, enum: ['WS', 'POS'], required: true },
+    series: { type: String, enum: ['WS', 'POS', 'OB'], required: true },
     channel: { type: String, enum: SALES_CHANNELS, required: true },
     partyId: { type: Schema.Types.ObjectId, ref: 'Party', default: null },
     walkInName: { type: String, trim: true, default: null },
     walkInPhone: { type: String, trim: true, default: null },
     partySnapshot: { type: snapshotSchema, default: null },
-    locationId: { type: Schema.Types.ObjectId, ref: 'Location', required: true },
+    locationId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Location',
+      default: null,
+      required(this: { series: string }) {
+        return this.series !== 'OB';
+      },
+    },
     orderId: { type: Schema.Types.ObjectId, default: null },
     dispatchId: { type: Schema.Types.ObjectId, default: null },
     posSessionId: { type: Schema.Types.ObjectId, default: null },
@@ -222,7 +231,7 @@ export function toInvoicePayload(doc: InvoiceDoc): InvoicePayload {
     customerPhone: doc.partySnapshot?.phone ?? doc.walkInPhone ?? null,
     customerAddress: doc.partySnapshot?.address ?? null,
     customerBin: doc.partySnapshot?.bin ?? null,
-    locationId: String(doc.locationId),
+    locationId: doc.locationId ? String(doc.locationId) : null,
     posSessionId: doc.posSessionId ? String(doc.posSessionId) : null,
     invoiceDate: doc.invoiceDate.toISOString(),
     dueDate: doc.dueDate ? doc.dueDate.toISOString() : null,

@@ -62,6 +62,17 @@ export const listLedgerQueryFields = {
   to: day.optional(),
 };
 
+/** A party's statement: `from`–`to`, inclusive, in the org's zone. Defaults: this month to today. */
+export const statementQuerySchema = z
+  .object({ partyId: objectId, from: day.optional(), to: day.optional() })
+  .strict()
+  .refine((q) => !q.from || !q.to || q.from <= q.to, {
+    path: ['to'],
+    message: 'The end date is before the start date',
+  });
+
+export type StatementQuery = z.infer<typeof statementQuerySchema>;
+
 export type OpeningBalanceRow = z.infer<typeof openingBalanceRowSchema>;
 export type OpeningBalanceImportInput = z.infer<typeof openingBalanceImportSchema>;
 

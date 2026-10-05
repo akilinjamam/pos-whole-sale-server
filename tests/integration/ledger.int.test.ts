@@ -11,6 +11,7 @@ import {
   packDispatch,
   postDispatch,
 } from '../../src/modules/dispatch/dispatch.service.js';
+import { Invoice } from '../../src/modules/invoice/invoice.model.js';
 import { LedgerEntry } from '../../src/modules/ledger/ledgerEntry.model.js';
 import {
   importOpeningBalances,
@@ -19,6 +20,8 @@ import {
 } from '../../src/modules/ledger/ledger.service.js';
 import { Party } from '../../src/modules/party/party.model.js';
 import { createParty } from '../../src/modules/party/party.service.js';
+import { PaymentDoc } from '../../src/modules/payment/paymentDoc.model.js';
+import { postReceipt } from '../../src/modules/payment/receipt.service.js';
 import { postPosSale } from '../../src/modules/pos/posSale.service.js';
 import { openSession } from '../../src/modules/pos/posSession.service.js';
 import {
@@ -109,6 +112,8 @@ describe('opening balances', () => {
       [5, 'ERROR', 'DEBIT'],
     ]);
     expect(r.rows[2]!.errors).toEqual(['No party with code ZZ-NOPE']);
+    // What each row will become, before anything is committed.
+    expect(r.rows.slice(0, 2).map((x) => x.creates)).toEqual(['INVOICE', 'PAYABLE']);
     expect(r.rows[3]!.errors[0]).toMatch(/also on line 2/);
     expect(r.rows[0]).toMatchObject({ partyName: 'ZZTEST Rahman Optics', roles: ['DEALER'] });
     expect(r).toMatchObject({ posted: 0, failed: 2, netMinor: 750_000, refId: null });
@@ -146,6 +151,81 @@ describe('opening balances', () => {
     expect(entries[0]!.dueDate?.toISOString().slice(0, 10)).toBe('2026-09-14');
     expect(entries[1]!.dueDate).toBeNull();
     expect((await Party.findById(f.dealerId).lean())!.openingBalanceMinor).toBe(1_000_000);
+
+    // The receivable is an opening invoice: payable and ageable like any other. Its ledger entry
+    // points at it; it does not post a second time.
+    expect(r.rows[0]!.docNo).toMatch(/^OB-/);
+    expect(r.rows[1]!.docNo).toBeUndefined();
+    const ob = (await Invoice.findOne({ orgId: f.orgId, series: 'OB' }).lean())!;
+    expect(ob).toMatchObject({
+      docNo: r.rows[0]!.docNo,
+      status: 'POSTED',
+      grandTotalMinor: 1_000_000,
+      balanceMinor: 1_000_000,
+      paymentStatus: 'UNPAID',
+      locationId: null,
+      note: 'Opening balance — Old INV 4412',
+    });
+    expect(ob.dueDate?.toISOString().slice(0, 10)).toBe('2026-09-14');
+    expect(entries[0]).toMatchObject({ refType: 'INVOICE', refDocNo: ob.docNo });
+    expect(entries[0]!.refId?.equals(ob._id)).toBe(true);
+    expect(entries[1]).toMatchObject({
+      refType: 'OPENING_BALANCE',
+      refDocNo: 'OPEN-BAL-2026-09-01',
+    });
+  });
+
+  it('a receipt pays the opening invoice off like any other — it is the oldest due', async () => {
+    const r = await postReceipt(actor, {
+      partyId: f.dealerId,
+      amountMinor: 300_000,
+      method: 'CASH',
+    });
+    const ob = (await Invoice.findOne({ orgId: f.orgId, series: 'OB' }).lean())!;
+    expect(r.receipt.allocations.map((a) => [a.docNo, a.amountMinor])).toEqual([
+      [ob.docNo, 300_000],
+    ]);
+    expect(ob).toMatchObject({
+      paidMinor: 300_000,
+      balanceMinor: 700_000,
+      paymentStatus: 'PARTIAL',
+    });
+  });
+
+  it('a dealer’s opening advance becomes a receipt on account, spendable later', async () => {
+    const prepaid = await createParty(
+      { orgId: f.orgId, actorId: f.userId, permissions: ALL_PERMISSIONS },
+      'DEALER',
+      { name: 'ZZTEST Prepaid Dealer' },
+    );
+    const r = await importOpeningBalances(actor, {
+      asOf: '2026-09-01',
+      dryRun: false,
+      rows: [
+        { line: 1, code: prepaid.code, amountMinor: -40_000, reference: 'Advance 2026-08' },
+      ],
+    });
+    expect(r.rows[0]).toMatchObject({
+      creates: 'ADVANCE',
+      docNo: expect.stringMatching(/^RCPT-/),
+    });
+    const pay = (await PaymentDoc.findOne({
+      orgId: f.orgId,
+      partyId: oid(prepaid.id),
+    }).lean())!;
+    expect(pay).toMatchObject({
+      method: 'ADJUSTMENT',
+      amountMinor: 40_000,
+      allocatedMinor: 0,
+      unallocatedMinor: 40_000,
+      narration: 'Opening advance — Advance 2026-08',
+    });
+    // One ledger entry for it — the OPENING credit — not a second RECEIPT on top.
+    const entries = await LedgerEntry.find({ orgId: f.orgId, partyId: oid(prepaid.id) }).lean();
+    expect(entries.map((e) => [e.docType, e.creditMinor, e.refType])).toEqual([
+      ['OPENING', 40_000, 'PAYMENT'],
+    ]);
+    expect(await balanceOf(prepaid.id)).toBe(-40_000);
   });
 
   it('a party gets one opening balance — a second is refused', async () => {
@@ -234,13 +314,15 @@ describe('the done-when: a mixed sequence, then reconcile', () => {
       expect(p.currentBalanceMinor, p.code).toBe(sums.get(String(p._id)) ?? 0);
     }
     const receipts = Array.from({ length: 12 }, (_, i) => 1_000 + i).reduce((s, n) => s + n, 0);
-    expect(await balanceOf(f.dealerId)).toBe(1_000_000 + 72_000 + 12_000 - 5_000 - receipts);
+    expect(await balanceOf(f.dealerId)).toBe(
+      1_000_000 - 300_000 + 72_000 + 12_000 - 5_000 - receipts,
+    );
     expect(await balanceOf(supplierId)).toBe(-250_000 + 100_000);
 
     const r = await reconcileLedger(f.orgId);
     expect(r.clean).toBe(true);
     expect(r.drift).toEqual([]);
-    expect(r.counts).toMatchObject({ parties: 2, partiesWithEntries: 2 });
+    expect(r.counts).toMatchObject({ parties: 3, partiesWithEntries: 3 });
     expect(r.counts.entries).toBe(await LedgerEntry.countDocuments({ orgId: f.orgId }));
   });
 
@@ -296,7 +378,8 @@ describe('the ledger stays append-only', () => {
       partyCode: dealerCode,
     });
     expect(meta.total).toBe(items.length);
-    expect(items.map((i) => i.docType).filter((t) => t === 'RECEIPT')).toHaveLength(13);
+    // 12 concurrent receipts, the counter part-payment, and the ৳3,000 against the opening invoice.
+    expect(items.map((i) => i.docType).filter((t) => t === 'RECEIPT')).toHaveLength(14);
   });
 
   it('a concurrent second load of the same openings is refused, not doubled', async () => {

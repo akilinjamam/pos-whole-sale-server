@@ -85,6 +85,21 @@ export const allocationPreviewQuerySchema = z
   })
   .strict();
 
+/** The collector's round: dealers who owe, optionally narrowed by salesperson or territory. */
+export const collectionSheetQuerySchema = z
+  .object({
+    salespersonUserId: objectId.optional(),
+    territory: z.string().trim().max(60).optional(),
+    /** Only dealers with something past due. */
+    overdueOnly: z
+      .enum(['true', 'false'])
+      .transform((v) => v === 'true')
+      .optional(),
+  })
+  .strict();
+
+export type CollectionSheetQuery = z.infer<typeof collectionSheetQuerySchema>;
+
 export type AllocationInput = z.infer<typeof allocationInputSchema>;
 export type ReceiptInput = z.infer<typeof receiptSchema>;
 export type AllocateReceiptInput = z.infer<typeof allocateReceiptSchema>;

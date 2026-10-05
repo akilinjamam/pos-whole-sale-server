@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { listQuerySchema } from '../../lib/paginate.js';
 import { listLedgerQueryFields } from '../../shared/ledger.js';
 
-export { openingBalanceImportSchema } from '../../shared/ledger.js';
+export { openingBalanceImportSchema, statementQuerySchema } from '../../shared/ledger.js';
 
 export const listLedgerQuerySchema = listQuerySchema.extend(listLedgerQueryFields);
 export type ListLedgerQuery = z.infer<typeof listLedgerQuerySchema>;

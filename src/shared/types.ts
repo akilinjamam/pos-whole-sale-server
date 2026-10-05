@@ -958,7 +958,7 @@ export interface InvoiceLinePayload {
 export interface InvoicePayload {
   id: string;
   docNo: string | null;
-  series: 'WS' | 'POS';
+  series: 'WS' | 'POS' | 'OB';
   channel: 'WHOLESALE' | 'COUNTER';
   status: 'DRAFT' | 'POSTED' | 'CANCELLED';
   partyId: string | null;
@@ -968,7 +968,8 @@ export interface InvoicePayload {
   customerPhone: string | null;
   customerAddress: string | null;
   customerBin: string | null;
-  locationId: string;
+  /** Null for an opening-balance invoice. */
+  locationId: string | null;
   locationName?: string;
   salespersonName?: string;
   posSessionId: string | null;
@@ -1360,6 +1361,13 @@ export interface OpeningBalanceRowResult {
   roles?: PartyRole[];
   /** Which side the row posts to — shown in the dry run before anything is committed. */
   side?: 'DEBIT' | 'CREDIT';
+  /**
+   * What the row becomes: an opening invoice (`OB-…`, payable and ageable like any invoice), an
+   * opening advance (a receipt held on account), or — for a supplier — a ledger balance.
+   */
+  creates?: 'INVOICE' | 'ADVANCE' | 'PAYABLE';
+  /** Once committed: the invoice's or receipt's number. */
+  docNo?: string;
   amountMinor?: number;
 }
 
@@ -1460,4 +1468,77 @@ export interface ReceiptResult {
   receipt: ReceiptPayload;
   /** Each invoice the receipt touched, as it stands now. */
   invoices: { id: string; docNo: string; balanceMinor: number; paymentStatus: PaymentStatus }[];
+}
+
+// ─── Statement and collection sheet (Day 29) ────────────────────────────────────────────
+
+export interface StatementLinePayload {
+  id: string;
+  postedAt: string;
+  docType: LedgerDocType;
+  refType: string;
+  refId: string | null;
+  refDocNo: string | null;
+  narration: string | null;
+  dueDate: string | null;
+  debitMinor: number;
+  creditMinor: number;
+  /** What the party owed after this entry — computed at read time, in posting order. */
+  runningMinor: number;
+}
+
+/** A party's statement for a period: brought forward, every entry with its running balance, carried. */
+export interface StatementPayload {
+  party: {
+    id: string;
+    code: string;
+    name: string;
+    phone: string | null;
+    address: string | null;
+    creditLimitMinor: number | null;
+    paymentTermsDays: number | null;
+  };
+  /** `YYYY-MM-DD`, inclusive both ends, in the org's zone. */
+  from: string;
+  to: string;
+  /** Balance brought forward: everything before `from`. */
+  openingBalanceMinor: number;
+  lines: StatementLinePayload[];
+  totals: { debitMinor: number; creditMinor: number };
+  /** Balance carried forward at the end of `to`. */
+  closingBalanceMinor: number;
+  /** The live cached balance — equal to the closing balance when `to` is today. */
+  currentBalanceMinor: number;
+  generatedAt: string;
+}
+
+export interface CollectionInvoice {
+  id: string;
+  docNo: string;
+  invoiceDate: string;
+  dueDate: string | null;
+  balanceMinor: number;
+  daysOverdue: number | null;
+}
+
+/** One dealer on the collector's round. */
+export interface CollectionRow {
+  partyId: string;
+  code: string;
+  name: string;
+  phone: string | null;
+  address: string | null;
+  territory: string | null;
+  salespersonUserId: string | null;
+  totalDueMinor: number;
+  overdueMinor: number;
+  /** Money of theirs already on account — to be set off before asking for more. */
+  advanceMinor: number;
+  invoices: CollectionInvoice[];
+}
+
+export interface CollectionSheet {
+  asOf: string;
+  rows: CollectionRow[];
+  totals: { dueMinor: number; overdueMinor: number; dealers: number };
 }

@@ -25,7 +25,9 @@ export async function getInvoice(
 ): Promise<InvoicePayload> {
   const doc = await Invoice.findOne({ _id: id, orgId: actor.orgId }).lean();
   const scope = locationScopeOf(actor.user);
-  if (!doc || (scope && !scope.includes(String(doc.locationId)))) {
+  // An opening-balance invoice has no location: it belongs to the account, visible to everyone
+  // who may read invoices.
+  if (!doc || (scope && doc.locationId && !scope.includes(String(doc.locationId)))) {
     throw ApiError.notFound('Invoice');
   }
   return invoicePayload(doc);
@@ -37,7 +39,12 @@ export async function listInvoices(
 ): Promise<{ items: InvoicePayload[]; meta: PageMeta }> {
   const filter: FilterQuery<InvoiceDoc> = { orgId: actor.orgId };
   const scope = locationScopeOf(actor.user);
-  if (scope) filter.locationId = { $in: scope.map((id) => new Types.ObjectId(id)) };
+  if (scope) {
+    filter.$or = [
+      { locationId: { $in: scope.map((id) => new Types.ObjectId(id)) } },
+      { locationId: null },
+    ];
+  }
   if (query.orderId) filter.orderId = new Types.ObjectId(query.orderId);
   if (query.dispatchId) filter.dispatchId = new Types.ObjectId(query.dispatchId);
   if (query.partyId) filter.partyId = new Types.ObjectId(query.partyId);

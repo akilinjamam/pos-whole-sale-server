@@ -10,14 +10,16 @@ import { validate } from '../../middleware/validate.js';
 import {
   allocateReceiptSchema,
   allocationPreviewQuerySchema,
+  collectionSheetQuerySchema,
   idParamSchema,
   listReceiptsQuerySchema,
   receiptSchema,
 } from './payment.schema.js';
+import { collectionSheet } from './collection.service.js';
 import * as service from './receipt.service.js';
 
 import type { ListReceiptsQuery } from './payment.schema.js';
-import type { AllocationPreviewQuery } from '@shared/payments.js';
+import type { AllocationPreviewQuery, CollectionSheetQuery } from '@shared/payments.js';
 import type { Request } from 'express';
 
 /**
@@ -40,6 +42,19 @@ router.get(
         requestActorOf(req),
         req.query as unknown as AllocationPreviewQuery,
       ),
+    );
+  }),
+);
+/** The collector's round: dealers who owe, most overdue first, with their open invoices. */
+router.get(
+  '/collection-sheet',
+  authenticate,
+  requirePermission('payment:read'),
+  validate({ query: collectionSheetQuerySchema }),
+  asyncHandler(async (req, res) => {
+    sendData(
+      res,
+      await collectionSheet(requestActorOf(req), req.query as unknown as CollectionSheetQuery),
     );
   }),
 );

@@ -10,7 +10,8 @@ import {
 } from '../../src/modules/dispatch/dispatch.service.js';
 import { Invoice } from '../../src/modules/invoice/invoice.model.js';
 import { LedgerEntry } from '../../src/modules/ledger/ledgerEntry.model.js';
-import { reconcileLedger } from '../../src/modules/ledger/ledger.service.js';
+import { partyStatement, reconcileLedger } from '../../src/modules/ledger/ledger.service.js';
+import { collectionSheet } from '../../src/modules/payment/collection.service.js';
 import { Party } from '../../src/modules/party/party.model.js';
 import { PaymentDoc } from '../../src/modules/payment/paymentDoc.model.js';
 import {
@@ -313,5 +314,106 @@ describe('integrity', () => {
     expect(alloc!.a).toBe(paid!.p);
     expect(alloc!.a + alloc!.u).toBe(alloc!.t);
     expect((await reconcileLedger(f.orgId)).clean).toBe(true);
+  });
+});
+
+describe('the statement (Day 29): running balance across a back-dated entry', () => {
+  const dayOf = (d: Date) => d.toISOString().slice(0, 10);
+  const today = dayOf(new Date(Date.now() + 6 * 3_600_000)); // Dhaka's day, near enough for a range end
+
+  /** Every line's running balance, recomputed here in posting order, independently of the window. */
+  function recompute(s: Awaited<ReturnType<typeof partyStatement>>) {
+    let run = s.openingBalanceMinor;
+    return s.lines.map((l) => (run += l.debitMinor - l.creditMinor));
+  }
+
+  it('matches the ledger exactly — and still does after a back-dated receipt lands in the past', async () => {
+    const before = await partyStatement(actor, {
+      partyId: f.dealerId,
+      from: '2026-01-01',
+      to: today,
+    });
+    expect(before.lines.map((l) => l.runningMinor)).toEqual(recompute(before));
+    expect(before.closingBalanceMinor).toBe(await balance());
+    expect(before.openingBalanceMinor).toBe(0);
+
+    // Posted now, dated ten days ago: before every invoice in this org.
+    const tenDaysAgo = new Date(Date.now() - 10 * 86_400_000);
+    const late = await postReceipt(actor, {
+      partyId: f.dealerId,
+      amountMinor: 7_000,
+      method: 'BANK',
+      paidAt: tenDaysAgo.toISOString(),
+      reference: 'ZZ back-dated deposit slip',
+      allocations: [],
+    });
+
+    const after = await partyStatement(actor, {
+      partyId: f.dealerId,
+      from: '2026-01-01',
+      to: today,
+    });
+    // It takes its place by date — first — not at the end where it was posted.
+    expect(after.lines[0]).toMatchObject({
+      refDocNo: late.receipt.docNo,
+      creditMinor: 7_000,
+      runningMinor: -7_000,
+    });
+    // Every later balance moved by exactly the back-dated amount.
+    expect(after.lines.slice(1).map((l) => l.runningMinor)).toEqual(
+      before.lines.map((l) => l.runningMinor - 7_000),
+    );
+    expect(after.lines.map((l) => l.runningMinor)).toEqual(recompute(after));
+    expect(after.closingBalanceMinor).toBe(await balance());
+    expect(after.closingBalanceMinor).toBe(after.currentBalanceMinor);
+    expect(after.totals.creditMinor - before.totals.creditMinor).toBe(7_000);
+  });
+
+  it('a period starting after the back-dated entry carries it in the balance brought forward', async () => {
+    const all = await partyStatement(actor, {
+      partyId: f.dealerId,
+      from: '2026-01-01',
+      to: today,
+    });
+    const yesterday = dayOf(new Date(Date.now() - 86_400_000));
+    const recent = await partyStatement(actor, {
+      partyId: f.dealerId,
+      from: yesterday,
+      to: today,
+    });
+    const earlier = all.lines.filter((l) => l.postedAt.slice(0, 10) < yesterday);
+    expect(recent.openingBalanceMinor).toBe(
+      earlier.reduce((t, l) => t + l.debitMinor - l.creditMinor, 0),
+    );
+    expect(recent.closingBalanceMinor).toBe(all.closingBalanceMinor);
+    expect(recent.lines.map((l) => l.runningMinor)).toEqual(recompute(recent));
+  });
+
+  it('a period ending before the invoices closes on what was owed then', async () => {
+    const s = await partyStatement(actor, {
+      partyId: f.dealerId,
+      from: '2026-01-01',
+      to: dayOf(new Date(Date.now() - 5 * 86_400_000)),
+    });
+    expect(s.lines.map((l) => l.creditMinor)).toEqual([7_000]);
+    expect(s.closingBalanceMinor).toBe(-7_000);
+  });
+
+  it('the collection sheet lists what is open, and the advance held against it', async () => {
+    await postReceipt(actor, receipt({ amountMinor: 1_000, allocations: [] })); // an advance
+    const owed = await invoiced(3); // ৳180 open
+    const sheet = await collectionSheet(actor, {});
+    const row = sheet.rows.find((r) => r.partyId === f.dealerId)!;
+    const open = await Invoice.find({
+      orgId: f.orgId,
+      partyId: oid(f.dealerId),
+      balanceMinor: { $gt: 0 },
+    }).lean();
+    expect(row.invoices.map((i) => i.docNo).sort()).toEqual(open.map((i) => i.docNo).sort());
+    expect(row.invoices.some((i) => i.docNo === owed.docNo)).toBe(true);
+    expect(row.totalDueMinor).toBe(open.reduce((t, i) => t + i.balanceMinor, 0));
+    expect(row.advanceMinor).toBeGreaterThanOrEqual(1_000);
+    expect(row.overdueMinor).toBe(0); // 30-day terms: nothing past due yet
+    expect((await collectionSheet(actor, { overdueOnly: true })).rows).toEqual([]);
   });
 });

@@ -11,10 +11,12 @@ import {
   listLedgerQuerySchema,
   openingBalanceImportSchema,
   reconcileBodySchema,
+  statementQuerySchema,
 } from './ledger.schema.js';
 import * as service from './ledger.service.js';
 
 import type { ListLedgerQuery } from './ledger.schema.js';
+import type { StatementQuery } from '@shared/ledger.js';
 
 /**
  * The party ledger (Day 27). Entries are only ever *written* by the documents that post them —
@@ -34,6 +36,20 @@ router.get(
       req.query as unknown as ListLedgerQuery,
     );
     sendPage(res, items, meta);
+  }),
+);
+
+/** A party's statement for a period, with the running balance computed at read time. */
+router.get(
+  '/statement',
+  authenticate,
+  requirePermission('ledger:read'),
+  validate({ query: statementQuerySchema }),
+  asyncHandler(async (req, res) => {
+    sendData(
+      res,
+      await service.partyStatement(requestActorOf(req), req.query as unknown as StatementQuery),
+    );
   }),
 );
 

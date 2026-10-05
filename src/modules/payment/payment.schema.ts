@@ -6,6 +6,7 @@ import { PAYMENT_METHODS } from '../../shared/enums.js';
 export {
   allocateReceiptSchema,
   allocationPreviewQuerySchema,
+  collectionSheetQuerySchema,
   receiptSchema,
 } from '../../shared/payments.js';
 
