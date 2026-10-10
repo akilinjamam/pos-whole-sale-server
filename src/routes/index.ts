@@ -23,6 +23,7 @@ import productRouter from '../modules/product/product.route.js';
 import roleRouter from '../modules/role/role.route.js';
 import serialRouter from '../modules/serialUnit/serialUnit.route.js';
 import stockRouter from '../modules/stock/stock.route.js';
+import supplierPoRouter from '../modules/supplierPo/supplierPo.route.js';
 import stockAdjustmentRouter from '../modules/stockAdjustment/stockAdjustment.route.js';
 import stockCountRouter from '../modules/stockCount/stockCount.route.js';
 import stockTransferRouter from '../modules/stockTransfer/stockTransfer.route.js';
@@ -118,6 +119,10 @@ export const allRoutes: RouteEntry[] = [
 
   // The audit log (Day 31): read-only. Credit overrides write to it; Day 39 adds the rest.
   { path: 'audit', route: auditRouter },
+
+  // Purchase orders (Day 32). Status moves only through `domain/poStateMachine.ts`; receiving is
+  // done by a posted goods receipt (Day 33), not here.
+  { path: 'purchase-orders', route: supplierPoRouter },
 ];
 
 /** Paths that skip authentication, as full mount prefixes. */

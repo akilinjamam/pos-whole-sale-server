@@ -29,6 +29,7 @@ import type {
   LedgerDocType,
   PaymentMethod,
   PaymentStatus,
+  PoStatus,
   SalesChannel,
   OrderStatus,
   DocumentStatus,
@@ -1679,4 +1680,76 @@ export interface CreditOverrideDashboard {
   }[];
   dealers: CreditOverrideDealer[];
   rows: CreditOverrideRow[];
+}
+
+// ─── Purchase orders (Day 32) ───────────────────────────────────────────────────────────
+
+/**
+ * Money fields are `null` for a caller without `stock:viewCost` — a store keeper receives against
+ * the PO and needs its quantities, not what the company pays (§9).
+ */
+export interface PoLinePayload {
+  id: string;
+  lineNo: number;
+  productId: string;
+  variantId: string | null;
+  productName?: string;
+  sku?: string;
+  uomCode: string;
+  uomQty: number;
+  qtyBase: number;
+  qtyReceivedBase: number;
+  qtyCancelledBase: number;
+  qtyOutstandingBase: number;
+  unitCostMinor: number | null;
+  discountPct: number;
+  discountMinor: number | null;
+  taxPct: number;
+  taxMinor: number | null;
+  lineTotalMinor: number | null;
+}
+
+export interface PoStatusHistoryPayload {
+  from: PoStatus | null;
+  to: PoStatus;
+  action: string;
+  at: string;
+  byUserId: string | null;
+  reason: string | null;
+}
+
+export interface PurchaseOrderPayload {
+  id: string;
+  /** Null until approved. */
+  docNo: string | null;
+  supplierPartyId: string;
+  supplierName?: string;
+  locationId: string;
+  locationName?: string;
+  status: PoStatus;
+  orderDate: string;
+  expectedDate: string | null;
+  lines: PoLinePayload[];
+  /** Whether the money fields were withheld from this caller. */
+  costHidden: boolean;
+  subtotalMinor: number | null;
+  discountMinor: number | null;
+  taxMinor: number | null;
+  shippingMinor: number | null;
+  grandTotalMinor: number | null;
+  paymentTermsDays: number;
+  supplierRef: string | null;
+  note: string | null;
+  /** Received so far as a share of what was ordered, in base units — 0 to 1. */
+  receivedRatio: number;
+  approvedByUserId: string | null;
+  approvedAt: string | null;
+  sentAt: string | null;
+  cancelledAt: string | null;
+  cancelReason: string | null;
+  closedAt: string | null;
+  statusHistory: PoStatusHistoryPayload[];
+  availableActions: { action: string; to: PoStatus; requiresReason: boolean }[];
+  createdAt: string;
+  updatedAt: string;
 }
