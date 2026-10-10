@@ -23,6 +23,8 @@ import type {
   CreditCheckStatus,
   DispatchStatus,
   FulfillmentStatus,
+  AgeingBucket,
+  ChequeStatus,
   LedgerDocType,
   PaymentMethod,
   PaymentStatus,
@@ -1412,6 +1414,22 @@ export interface ReceiptAllocationPayload {
   docNo: string;
   amountMinor: number;
   allocatedAt: string;
+  /** Undone — the cheque bounced (Day 30). The invoice owes this again. */
+  reversedAt: string | null;
+}
+
+export interface ChequeInstrumentPayload {
+  chequeNo: string;
+  bankName: string | null;
+  branch: string | null;
+  /** The date written on the cheque — it cannot clear before this. */
+  chequeDate: string | null;
+  status: ChequeStatus;
+  depositedAt: string | null;
+  clearedAt: string | null;
+  bouncedAt: string | null;
+  bounceReason: string | null;
+  bounceChargeMinor: number;
 }
 
 export interface ReceiptPayload {
@@ -1431,6 +1449,10 @@ export interface ReceiptPayload {
   mfs: { provider: string; trxId: string; senderNumber: string | null } | null;
   narration: string | null;
   status: 'POSTED' | 'CANCELLED';
+  /** A cheque's own details and where it is in its life (Day 30). */
+  instrument: ChequeInstrumentPayload | null;
+  /** A cheque's chosen split, applied when it clears. */
+  intendedAllocations: { invoiceId: string; docNo: string; amountMinor: number }[];
   collectedByUserId: string | null;
   createdAt: string;
 }
@@ -1541,4 +1563,41 @@ export interface CollectionSheet {
   asOf: string;
   rows: CollectionRow[];
   totals: { dueMinor: number; overdueMinor: number; dealers: number };
+}
+
+// ─── Ageing (Day 30) ────────────────────────────────────────────────────────────────────
+
+export interface AgeingInvoicePayload {
+  id: string;
+  docNo: string;
+  invoiceDate: string;
+  dueDate: string | null;
+  /** As it stood on the as-of day. */
+  balanceMinor: number;
+  daysOverdue: number;
+  bucket: AgeingBucket;
+}
+
+export interface AgeingRow {
+  partyId: string;
+  code: string;
+  name: string;
+  phone: string | null;
+  territory: string | null;
+  creditLimitMinor: number | null;
+  buckets: Record<AgeingBucket, number>;
+  totalMinor: number;
+  /** The worst invoice's days past due — what to ring about first. */
+  oldestDays: number;
+  invoices: AgeingInvoicePayload[];
+}
+
+export interface AgeingReport {
+  /** `YYYY-MM-DD`, in the org's zone. */
+  asOf: string;
+  buckets: AgeingBucket[];
+  totals: Record<AgeingBucket, number>;
+  totalMinor: number;
+  rows: AgeingRow[];
+  generatedAt: string;
 }

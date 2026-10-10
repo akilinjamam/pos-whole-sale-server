@@ -10,16 +10,28 @@ import { validate } from '../../middleware/validate.js';
 import {
   allocateReceiptSchema,
   allocationPreviewQuerySchema,
+  ageingQuerySchema,
+  bounceChequeSchema,
+  chequeSchema,
+  clearChequeSchema,
   collectionSheetQuerySchema,
+  depositChequeSchema,
   idParamSchema,
+  listChequesQuerySchema,
   listReceiptsQuerySchema,
   receiptSchema,
 } from './payment.schema.js';
+import { ageingReport } from './ageing.service.js';
+import * as cheques from './cheque.service.js';
 import { collectionSheet } from './collection.service.js';
 import * as service from './receipt.service.js';
 
-import type { ListReceiptsQuery } from './payment.schema.js';
-import type { AllocationPreviewQuery, CollectionSheetQuery } from '@shared/payments.js';
+import type { ListChequesQuery, ListReceiptsQuery } from './payment.schema.js';
+import type {
+  AgeingQuery,
+  AllocationPreviewQuery,
+  CollectionSheetQuery,
+} from '@shared/payments.js';
 import type { Request } from 'express';
 
 /**
@@ -96,6 +108,71 @@ router.post(
   validate({ params: idParamSchema, body: allocateReceiptSchema }),
   asyncHandler(async (req, res) => {
     sendData(res, await service.allocateReceipt(requestActorOf(req), idOf(req), req.body));
+  }),
+);
+
+// ─── Cheques (Day 30) ───────────────────────────────────────────────────────────────────
+// Taken and moved through their life on `payment:cheque`. Nothing posts until one clears.
+
+router.get(
+  '/cheques',
+  authenticate,
+  requirePermission('payment:read'),
+  validate({ query: listChequesQuerySchema }),
+  asyncHandler(async (req, res) => {
+    const { items, meta } = await cheques.listCheques(
+      requestActorOf(req),
+      req.query as unknown as ListChequesQuery,
+    );
+    sendPage(res, items, meta);
+  }),
+);
+router.post(
+  '/cheques',
+  authenticate,
+  requirePermission('payment:cheque'),
+  validate({ body: chequeSchema }),
+  asyncHandler(async (req, res) => {
+    sendCreated(res, await cheques.receiveCheque(requestActorOf(req), req.body));
+  }),
+);
+router.post(
+  '/cheques/:id/deposit',
+  authenticate,
+  requirePermission('payment:cheque'),
+  validate({ params: idParamSchema, body: depositChequeSchema }),
+  asyncHandler(async (req, res) => {
+    sendData(res, await cheques.depositCheque(requestActorOf(req), idOf(req), req.body));
+  }),
+);
+router.post(
+  '/cheques/:id/clear',
+  authenticate,
+  requirePermission('payment:cheque'),
+  validate({ params: idParamSchema, body: clearChequeSchema }),
+  asyncHandler(async (req, res) => {
+    sendData(res, await cheques.clearCheque(requestActorOf(req), idOf(req), req.body));
+  }),
+);
+router.post(
+  '/cheques/:id/bounce',
+  authenticate,
+  requirePermission('payment:cheque'),
+  validate({ params: idParamSchema, body: bounceChequeSchema }),
+  asyncHandler(async (req, res) => {
+    sendData(res, await cheques.bounceCheque(requestActorOf(req), idOf(req), req.body));
+  }),
+);
+
+// ─── Ageing (Day 30) ────────────────────────────────────────────────────────────────────
+
+router.get(
+  '/ageing',
+  authenticate,
+  requirePermission('payment:read'),
+  validate({ query: ageingQuerySchema }),
+  asyncHandler(async (req, res) => {
+    sendData(res, await ageingReport(requestActorOf(req), req.query as unknown as AgeingQuery));
   }),
 );
 

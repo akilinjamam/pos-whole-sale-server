@@ -59,7 +59,7 @@ const refuse = (problems: { path: string; message: string }[]) =>
 
 const DAY = 86_400_000;
 
-async function openInvoiceDocs(
+export async function openInvoiceDocs(
   orgId: Types.ObjectId,
   partyId: Types.ObjectId,
   session?: ClientSession,
@@ -69,7 +69,7 @@ async function openInvoiceDocs(
     .lean();
 }
 
-const asOpen = (i: InvoiceDoc): OpenInvoice => ({
+export const asOpen = (i: InvoiceDoc): OpenInvoice => ({
   id: String(i._id),
   docNo: i.docNo ?? '',
   invoiceDate: i.invoiceDate,
@@ -92,7 +92,7 @@ function openPayload(i: InvoiceDoc, now: Date): OpenInvoicePayload {
   };
 }
 
-async function loadParty(actor: RequestActor, partyId: string) {
+export async function loadParty(actor: RequestActor, partyId: string) {
   const party = await Party.findOne({ _id: partyId, orgId: actor.orgId })
     .select('name displayName code roles')
     .lean();
@@ -107,7 +107,7 @@ async function loadParty(actor: RequestActor, partyId: string) {
  * guarded by `balanceMinor >= amount`: a receipt racing another for the same invoice cannot pay it
  * past zero — the loser finds nothing to match and the whole posting is refused.
  */
-async function settle(
+export async function settle(
   session: ClientSession,
   orgId: Types.ObjectId,
   plan: readonly Allocation[],
@@ -168,6 +168,7 @@ function toPayload(p: PaymentDocDoc, party?: { name: string; code: string }): Re
       docNo: a.docNo,
       amountMinor: a.amountMinor,
       allocatedAt: a.allocatedAt.toISOString(),
+      reversedAt: a.reversedAt ? a.reversedAt.toISOString() : null,
     })),
     reference: p.reference ?? null,
     mfs: p.mfs
@@ -179,12 +180,31 @@ function toPayload(p: PaymentDocDoc, party?: { name: string; code: string }): Re
       : null,
     narration: p.narration,
     status: p.status,
+    instrument: p.instrument
+      ? {
+          chequeNo: p.instrument.chequeNo,
+          bankName: p.instrument.bankName ?? null,
+          branch: p.instrument.branch ?? null,
+          chequeDate: p.instrument.chequeDate ? p.instrument.chequeDate.toISOString() : null,
+          status: p.instrument.status,
+          depositedAt: p.instrument.depositedAt ? p.instrument.depositedAt.toISOString() : null,
+          clearedAt: p.instrument.clearedAt ? p.instrument.clearedAt.toISOString() : null,
+          bouncedAt: p.instrument.bouncedAt ? p.instrument.bouncedAt.toISOString() : null,
+          bounceReason: p.instrument.bounceReason ?? null,
+          bounceChargeMinor: p.instrument.bounceChargeMinor ?? 0,
+        }
+      : null,
+    intendedAllocations: (p.intendedAllocations ?? []).map((a) => ({
+      invoiceId: String(a.invoiceId),
+      docNo: a.docNo,
+      amountMinor: a.amountMinor,
+    })),
     collectedByUserId: p.collectedByUserId ? String(p.collectedByUserId) : null,
     createdAt: p.createdAt.toISOString(),
   };
 }
 
-async function serialize(
+export async function serialize(
   orgId: Types.ObjectId,
   docs: PaymentDocDoc[],
 ): Promise<ReceiptPayload[]> {
@@ -197,7 +217,7 @@ async function serialize(
   return docs.map((d) => toPayload(d, by.get(String(d.partyId))));
 }
 
-const allocationDocs = (
+export const allocationDocs = (
   plan: readonly Allocation[],
   docNoOf: Map<string, string>,
   at: Date,
@@ -209,6 +229,7 @@ const allocationDocs = (
     amountMinor: a.amountMinor,
     allocatedAt: at,
     allocatedBy: by,
+    reversedAt: null,
   }));
 
 // ─── Preview ────────────────────────────────────────────────────────────────────────────
@@ -293,7 +314,6 @@ export async function postReceipt(
     const problems = validateAllocations(open, plan, input.amountMinor);
     if (problems.length) throw refuse(problems);
 
-    const now = new Date();
     const docNo = await nextDocNo(session, actor.orgId, 'RCPT', paidAt);
     const id = new Types.ObjectId();
     const allocatedMinor = plan.reduce((s, a) => s + a.amountMinor, 0);
@@ -313,10 +333,12 @@ export async function postReceipt(
           amountMinor: input.amountMinor,
           allocatedMinor,
           unallocatedMinor: input.amountMinor - allocatedMinor,
+          // Stamped with when the money arrived, not when it was typed in: a receipt back-dated
+          // to 10 Sep paid the invoice on 10 Sep, and ageing as of any later day must say so.
           allocations: allocationDocs(
             plan,
             new Map(open.map((o) => [o.id, o.docNo])),
-            now,
+            paidAt,
             actor.actorId,
           ),
           mfs: input.mfs ?? null,

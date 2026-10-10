@@ -100,6 +100,75 @@ export const collectionSheetQuerySchema = z
 
 export type CollectionSheetQuery = z.infer<typeof collectionSheetQuerySchema>;
 
+// ─── Cheques (Day 30) ───────────────────────────────────────────────────────────────────
+
+const notFuture = (v: string) => new Date(v).getTime() <= Date.now() + 60_000;
+const when = z.string().datetime({ offset: true }).refine(notFuture, 'Cannot be in the future');
+
+/**
+ * Taking a cheque. Like a receipt, but nothing posts until it clears: `allocations` is the split
+ * chosen now (default oldest-due-first), applied on clearing. Post-dated cheques are normal in this
+ * trade — `chequeDate` may be in the future, up to six months.
+ */
+export const chequeSchema = z
+  .object({
+    partyId: objectId,
+    amountMinor: minor,
+    chequeNo: z.string().trim().toUpperCase().min(1, 'Required').max(30),
+    bankName: z.string().trim().min(2, 'Which bank?').max(60),
+    branch: z.string().trim().max(60).nullable().optional(),
+    chequeDate: z
+      .string()
+      .date('Use YYYY-MM-DD')
+      .refine(
+        (v) => new Date(`${v}T00:00:00Z`).getTime() <= Date.now() + 183 * 86_400_000,
+        'More than six months ahead',
+      ),
+    /** When it was handed over. Default: now. */
+    receivedAt: when.optional(),
+    allocations: allocations.optional(),
+    narration: z.string().trim().max(300).nullable().optional(),
+  })
+  .strict();
+
+export const depositChequeSchema = z
+  .object({
+    depositedAt: when.optional(),
+    note: z.string().trim().max(200).nullable().optional(),
+  })
+  .strict();
+
+/** Cleared — from the bank statement. Default: now. Never before the date on the cheque. */
+export const clearChequeSchema = z.object({ clearedAt: when.optional() }).strict();
+
+export const bounceChequeSchema = z
+  .object({
+    reason: z
+      .string()
+      .trim()
+      .min(3, 'Say why — insufficient funds, signature mismatch…')
+      .max(200),
+    /** What the bank charged us for it, to pass on to the dealer. */
+    bounceChargeMinor: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+    bouncedAt: when.optional(),
+  })
+  .strict();
+
+/** Receivables ageing as of a day — default today. Re-runnable for any past day. */
+export const ageingQuerySchema = z
+  .object({
+    asOf: z.string().date('Use YYYY-MM-DD').optional(),
+    partyId: objectId.optional(),
+    territory: z.string().trim().max(60).optional(),
+  })
+  .strict();
+
+export type ChequeInput = z.infer<typeof chequeSchema>;
+export type DepositChequeInput = z.infer<typeof depositChequeSchema>;
+export type ClearChequeInput = z.infer<typeof clearChequeSchema>;
+export type BounceChequeInput = z.infer<typeof bounceChequeSchema>;
+export type AgeingQuery = z.infer<typeof ageingQuerySchema>;
+
 export type AllocationInput = z.infer<typeof allocationInputSchema>;
 export type ReceiptInput = z.infer<typeof receiptSchema>;
 export type AllocateReceiptInput = z.infer<typeof allocateReceiptSchema>;

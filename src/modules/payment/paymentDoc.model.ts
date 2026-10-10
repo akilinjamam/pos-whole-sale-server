@@ -21,6 +21,11 @@ export interface AllocationDoc {
   amountMinor: number;
   allocatedAt: Date;
   allocatedBy: Types.ObjectId | null;
+  /**
+   * Set when the allocation is undone — a cheque that bounced after clearing (Day 30). Kept, not
+   * deleted, so ageing can be re-run for any past date and see what was paid *then*.
+   */
+  reversedAt: Date | null;
 }
 
 export interface PaymentDocDoc {
@@ -44,11 +49,18 @@ export interface PaymentDocDoc {
     branch: string | null;
     chequeDate: Date | null;
     status: ChequeStatus;
+    depositedAt: Date | null;
     clearedAt: Date | null;
+    bouncedAt: Date | null;
     bounceReason: string | null;
     bounceChargeMinor: number;
   } | null;
   mfs: { provider: MfsProvider; trxId: string; senderNumber: string | null } | null;
+  /**
+   * A cheque's allocation as chosen when it was taken. Nothing is applied until it clears; then
+   * this is applied, capped at what each invoice still owes (Day 30).
+   */
+  intendedAllocations: { invoiceId: Types.ObjectId; docNo: string; amountMinor: number }[];
   collectedByUserId: Types.ObjectId | null;
   status: 'POSTED' | 'CANCELLED';
   /** A bank transfer reference, a deposit slip number (Day 28). */
@@ -67,6 +79,7 @@ const allocationSchema = new Schema<AllocationDoc>(
     amountMinor: { type: Number, required: true, min: 1 },
     allocatedAt: { type: Date, required: true },
     allocatedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+    reversedAt: { type: Date, default: null },
   },
   { _id: true },
 );
@@ -78,7 +91,9 @@ const instrumentSchema = new Schema(
     branch: { type: String, trim: true, default: null },
     chequeDate: { type: Date, default: null },
     status: { type: String, enum: CHEQUE_STATUSES, default: 'PENDING' },
+    depositedAt: { type: Date, default: null },
     clearedAt: { type: Date, default: null },
+    bouncedAt: { type: Date, default: null },
     bounceReason: { type: String, trim: true, default: null },
     bounceChargeMinor: { type: Number, default: 0 },
   },
@@ -111,6 +126,19 @@ const paymentDocSchema = new Schema<PaymentDocDoc>(
     allocations: { type: [allocationSchema], default: [] },
     instrument: { type: instrumentSchema, default: null },
     mfs: { type: mfsSchema, default: null },
+    intendedAllocations: {
+      type: [
+        new Schema(
+          {
+            invoiceId: { type: Schema.Types.ObjectId, ref: 'Invoice', required: true },
+            docNo: { type: String, required: true },
+            amountMinor: { type: Number, required: true, min: 1 },
+          },
+          { _id: false },
+        ),
+      ],
+      default: [],
+    },
     collectedByUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
     status: { type: String, enum: ['POSTED', 'CANCELLED'], default: 'POSTED' },
     reference: { type: String, trim: true, default: null },
