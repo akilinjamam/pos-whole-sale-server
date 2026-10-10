@@ -224,6 +224,7 @@ export const allocationDocs = (
   by: Types.ObjectId,
 ): Omit<AllocationDoc, '_id'>[] =>
   plan.map((a) => ({
+    kind: 'INVOICE' as const,
     invoiceId: new Types.ObjectId(a.invoiceId),
     docNo: docNoOf.get(a.invoiceId) ?? '',
     amountMinor: a.amountMinor,

@@ -16,4 +16,16 @@ export const listGrnQuerySchema = listQuerySchema.extend({
 
 export type ListGrnQuery = z.infer<typeof listGrnQuerySchema>;
 
+/** The purchase register's period (default: this month to today) and filters. */
+export const registerQuerySchema = z
+  .object({
+    from: z.string().date('Use YYYY-MM-DD').optional(),
+    to: z.string().date('Use YYYY-MM-DD').optional(),
+    supplierPartyId: objectId.optional(),
+    locationId: objectId.optional(),
+  })
+  .strict();
+
+export type RegisterQuery = z.infer<typeof registerQuerySchema>;
+
 export { cancelGrnSchema, createGrnSchema, updateGrnSchema } from '../../shared/purchasing.js';

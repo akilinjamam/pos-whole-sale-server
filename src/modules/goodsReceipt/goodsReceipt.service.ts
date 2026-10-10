@@ -142,6 +142,7 @@ async function serialize(
     grandTotalMinor: money(d.grandTotalMinor),
     balanceMinor: money(d.balanceMinor),
     paidMinor: money(d.paidMinor),
+    creditedMinor: money(d.creditedMinor ?? 0),
     paymentStatus: d.paymentStatus,
     dueDate: iso(d.dueDate),
     note: d.note,

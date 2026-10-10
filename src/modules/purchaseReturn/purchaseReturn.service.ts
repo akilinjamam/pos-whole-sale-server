@@ -1,5 +1,6 @@
 import { Types } from 'mongoose';
 
+import { paymentStatusOf } from '../../domain/allocation.js';
 import { movingAverageOut } from '../../domain/costing.js';
 import { returnValueMinor } from '../../domain/returns.js';
 import { ApiError } from '../../lib/ApiError.js';
@@ -116,6 +117,8 @@ async function serialize(
     }),
     costHidden: !seesCost,
     totalMinor: money(d.totalMinor),
+    appliedMinor: money(d.appliedMinor ?? 0),
+    unappliedMinor: money(d.unappliedMinor ?? 0),
     postedAt: d.postedAt.toISOString(),
     postedByUserId: d.postedBy ? String(d.postedBy) : null,
     createdAt: d.createdAt.toISOString(),
@@ -342,6 +345,9 @@ async function postInSession(
   }
   if (errors.length > 0) throw ApiError.validation('Validation failed', errors);
   const totalMinor = lines.reduce((t, l) => t + l.lineTotalMinor, 0);
+  // Against a receipt, the debit note comes off that bill — as far as anything is left to pay on
+  // it. The rest (a bill already paid) is credit on the supplier's account.
+  const appliedMinor = grn ? Math.min(totalMinor, grn.balanceMinor) : 0;
 
   // ── Number, and costs before anything moves ──
   const org = await Org.findById(actor.orgId).select('timeZone').session(session).lean();
@@ -371,6 +377,8 @@ async function postInSession(
         note: input.note ?? null,
         lines,
         totalMinor,
+        appliedMinor,
+        unappliedMinor: totalMinor - appliedMinor,
         postedAt,
         postedBy: actor.actorId,
         createdBy: actor.actorId,
@@ -448,6 +456,25 @@ async function postInSession(
         'ILLEGAL_TRANSITION',
         `Line ${lineNo} of ${grn!.docNo} was returned by someone else meanwhile — reload and try again`,
       );
+    }
+  }
+
+  // ── The bill follows ── guarded like a payment: the bill can never go below zero.
+  if (appliedMinor > 0) {
+    const g = await GoodsReceipt.findOneAndUpdate(
+      { _id: grn!._id, status: 'POSTED', balanceMinor: { $gte: appliedMinor } },
+      { $inc: { creditedMinor: appliedMinor, balanceMinor: -appliedMinor } },
+      { new: true, session },
+    ).lean();
+    if (!g) {
+      throw ApiError.conflict(
+        'ILLEGAL_TRANSITION',
+        `${grn!.docNo} was paid meanwhile — reload and try again`,
+      );
+    }
+    const paymentStatus = paymentStatusOf(g.grandTotalMinor, g.paidMinor, g.creditedMinor);
+    if (paymentStatus !== g.paymentStatus) {
+      await GoodsReceipt.updateOne({ _id: g._id }, { $set: { paymentStatus } }, { session });
     }
   }
 

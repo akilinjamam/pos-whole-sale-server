@@ -13,11 +13,13 @@ import {
   createGrnSchema,
   idParamSchema,
   listGrnQuerySchema,
+  registerQuerySchema,
   updateGrnSchema,
 } from './goodsReceipt.schema.js';
 import * as service from './goodsReceipt.service.js';
+import { purchaseRegister } from './purchaseRegister.service.js';
 
-import type { ListGrnQuery } from './goodsReceipt.schema.js';
+import type { ListGrnQuery, RegisterQuery } from './goodsReceipt.schema.js';
 import type { Request } from 'express';
 
 /**
@@ -43,6 +45,20 @@ router.get(
       req.query as unknown as ListGrnQuery,
     );
     sendPage(res, page.items, page.meta);
+  }),
+);
+// Before `/:id`. A money report: `report:purchase`, not `grn:read`.
+router.get(
+  '/register',
+  authenticate,
+  requirePermission('report:purchase'),
+  requireLocation,
+  validate({ query: registerQuerySchema }),
+  asyncHandler(async (req, res) => {
+    sendData(
+      res,
+      await purchaseRegister(requestActorOf(req), req.query as unknown as RegisterQuery),
+    );
   }),
 );
 router.get(

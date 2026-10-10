@@ -20,13 +20,22 @@ import {
   listChequesQuerySchema,
   listReceiptsQuerySchema,
   receiptSchema,
+  allocateSupplierPaymentSchema,
+  listSupplierPaymentsQuerySchema,
+  payablesPreviewQuerySchema,
+  supplierPaymentSchema,
 } from './payment.schema.js';
 import { ageingReport } from './ageing.service.js';
 import * as cheques from './cheque.service.js';
 import { collectionSheet } from './collection.service.js';
 import * as service from './receipt.service.js';
+import * as supplierPayments from './supplierPayment.service.js';
 
-import type { ListChequesQuery, ListReceiptsQuery } from './payment.schema.js';
+import type {
+  ListChequesQuery,
+  ListReceiptsQuery,
+  ListSupplierPaymentsQuery,
+} from './payment.schema.js';
 import type {
   AgeingQuery,
   AllocationPreviewQuery,
@@ -37,7 +46,8 @@ import type { Request } from 'express';
 /**
  * Payments (Day 28): receipts from dealers and account customers, and their allocation to
  * invoices. Reading on `payment:read`; taking money and allocating it on `payment:receipt`.
- * Supplier payments (`payment:supplierPay`, series `PAY`) arrive with purchasing, Day 35.
+ * Supplier payments (Day 35, series `PAY`): reading on `payment:read`, paying and allocating on
+ * `payment:supplierPay`.
  */
 const router = Router();
 const idOf = (req: Request) => toObjectId(req.params.id as string);
@@ -108,6 +118,67 @@ router.post(
   validate({ params: idParamSchema, body: allocateReceiptSchema }),
   asyncHandler(async (req, res) => {
     sendData(res, await service.allocateReceipt(requestActorOf(req), idOf(req), req.body));
+  }),
+);
+
+// ─── Supplier payments (Day 35) ─────────────────────────────────────────────────────────
+
+router.get(
+  '/payables-preview',
+  authenticate,
+  requirePermission('payment:read'),
+  validate({ query: payablesPreviewQuerySchema }),
+  asyncHandler(async (req, res) => {
+    sendData(
+      res,
+      await supplierPayments.payablesPreview(
+        requestActorOf(req),
+        req.query as unknown as AllocationPreviewQuery,
+      ),
+    );
+  }),
+);
+router.get(
+  '/supplier-payments',
+  authenticate,
+  requirePermission('payment:read'),
+  validate({ query: listSupplierPaymentsQuerySchema }),
+  asyncHandler(async (req, res) => {
+    const page = await supplierPayments.listSupplierPayments(
+      requestActorOf(req),
+      req.query as unknown as ListSupplierPaymentsQuery,
+    );
+    sendPage(res, page.items, page.meta);
+  }),
+);
+router.post(
+  '/supplier-payments',
+  authenticate,
+  requirePermission('payment:supplierPay'),
+  validate({ body: supplierPaymentSchema }),
+  asyncHandler(async (req, res) => {
+    sendCreated(res, await supplierPayments.postSupplierPayment(requestActorOf(req), req.body));
+  }),
+);
+router.get(
+  '/supplier-payments/:id',
+  authenticate,
+  requirePermission('payment:read'),
+  validate({ params: idParamSchema }),
+  asyncHandler(async (req, res) => {
+    sendData(res, await supplierPayments.getSupplierPayment(requestActorOf(req), idOf(req)));
+  }),
+);
+router.post(
+  '/supplier-payments/:id/allocate',
+  authenticate,
+  requirePermission('payment:supplierPay'),
+  validate({ params: idParamSchema, body: allocateSupplierPaymentSchema }),
+  asyncHandler(async (req, res) => {
+    sendData(
+      res,
+      await supplierPayments.allocateSupplierPayment(requestActorOf(req), idOf(req), req.body),
+    );
   }),
 );
 

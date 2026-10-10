@@ -61,6 +61,8 @@ export interface GoodsReceiptDoc {
   taxMinor: number;
   grandTotalMinor: number;
   paidMinor: number;
+  /** Taken off the bill by purchase returns against it (Day 35). */
+  creditedMinor: number;
   balanceMinor: number;
   paymentStatus: PaymentStatus;
   dueDate: Date | null;
@@ -118,6 +120,7 @@ const goodsReceiptSchema = new Schema<GoodsReceiptDoc>(
     taxMinor: { type: Number, default: 0 },
     grandTotalMinor: { type: Number, default: 0, min: 0 },
     paidMinor: { type: Number, default: 0, min: 0 },
+    creditedMinor: { type: Number, default: 0, min: 0 },
     balanceMinor: { type: Number, default: 0, min: 0 },
     paymentStatus: { type: String, enum: PAYMENT_STATUSES, default: 'UNPAID' },
     dueDate: { type: Date, default: null },

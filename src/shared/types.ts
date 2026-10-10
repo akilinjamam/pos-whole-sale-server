@@ -1535,6 +1535,8 @@ export interface StatementPayload {
     address: string | null;
     creditLimitMinor: number | null;
     paymentTermsDays: number | null;
+    /** A supplier's statement reads the other way round: a negative balance is what we owe. */
+    roles: PartyRole[];
   };
   /** `YYYY-MM-DD`, inclusive both ends, in the org's zone. */
   from: string;
@@ -1807,9 +1809,11 @@ export interface GoodsReceiptPayload {
   otherChargesMinor: number | null;
   taxMinor: number | null;
   grandTotalMinor: number | null;
-  /** What is still owed on it — Day 35's supplier payments allocate against this. */
+  /** What is still owed on it — supplier payments (Day 35) allocate against this. */
   balanceMinor: number | null;
   paidMinor: number | null;
+  /** Taken off by purchase returns against it (their debit notes). */
+  creditedMinor: number | null;
   paymentStatus: PaymentStatus;
   dueDate: string | null;
   note: string | null;
@@ -1859,6 +1863,9 @@ export interface PurchaseReturnPayload {
   costHidden: boolean;
   /** The debit note: what the supplier now owes back, or takes off what we owe them. */
   totalMinor: number | null;
+  /** Of it, taken off the receipt's bill; the rest is credit on the supplier's account. */
+  appliedMinor: number | null;
+  unappliedMinor: number | null;
   postedAt: string;
   postedByUserId: string | null;
   createdAt: string;
@@ -1890,4 +1897,113 @@ export interface ReorderSuggestionPayload {
   lastSupplierName: string | null;
   /** Null without `stock:viewCost`. */
   avgCostMinor: number | null;
+}
+
+// ─── Supplier payments (Day 35) ─────────────────────────────────────────────────────────
+
+/** A supplier's bill — a posted goods receipt — with something still to pay. */
+export interface OpenPayablePayload {
+  id: string;
+  docNo: string;
+  supplierInvoiceNo: string | null;
+  billDate: string;
+  dueDate: string | null;
+  grandTotalMinor: number;
+  paidMinor: number;
+  creditedMinor: number;
+  balanceMinor: number;
+  daysOverdue: number | null;
+}
+
+export interface SupplierPaymentAllocationPayload {
+  grnId: string;
+  docNo: string;
+  amountMinor: number;
+  allocatedAt: string;
+}
+
+export interface SupplierPaymentPayload {
+  id: string;
+  docNo: string;
+  partyId: string;
+  partyName?: string;
+  partyCode?: string;
+  paidAt: string;
+  method: PaymentMethod;
+  amountMinor: number;
+  allocatedMinor: number;
+  /** An advance to the supplier: paid, not yet set against a bill. */
+  unallocatedMinor: number;
+  allocations: SupplierPaymentAllocationPayload[];
+  reference: string | null;
+  mfs: { provider: string; trxId: string; senderNumber: string | null } | null;
+  narration: string | null;
+  status: 'POSTED' | 'CANCELLED';
+  paidByUserId: string | null;
+  createdAt: string;
+}
+
+/** `GET /payments/payables-preview` — oldest-due-first over the supplier's open bills. */
+export interface PayablesPreview {
+  partyId: string;
+  amountMinor: number;
+  openPayables: OpenPayablePayload[];
+  totalOpenMinor: number;
+  allocations: { grnId: string; docNo: string; amountMinor: number }[];
+  allocatedMinor: number;
+  unallocatedMinor: number;
+  /** Advances already paid to them, not yet set against a bill. */
+  existingAdvanceMinor: number;
+  /** Debit notes (purchase returns) not set against a bill — credit we hold with them. */
+  unappliedReturnsMinor: number;
+}
+
+export interface SupplierPaymentResult {
+  payment: SupplierPaymentPayload;
+  /** Each bill the payment touched, as it stands now. */
+  payables: { id: string; docNo: string; balanceMinor: number; paymentStatus: PaymentStatus }[];
+}
+
+// ─── Purchase register (Day 35) ─────────────────────────────────────────────────────────
+
+/** One posted receipt, or one return (negative), in a period. */
+export interface PurchaseRegisterRow {
+  kind: 'GRN' | 'RETURN';
+  id: string;
+  docNo: string;
+  date: string;
+  supplierPartyId: string;
+  supplierName?: string;
+  locationName?: string;
+  /** The PO or, for a return, the receipt it came back from. */
+  refDocNo: string | null;
+  supplierInvoiceNo: string | null;
+  goodsMinor: number;
+  otherChargesMinor: number;
+  /** Bill total; negative for a return. */
+  totalMinor: number;
+  paidMinor: number;
+  balanceMinor: number;
+  dueDate: string | null;
+}
+
+export interface PurchaseRegisterPayload {
+  from: string;
+  to: string;
+  rows: PurchaseRegisterRow[];
+  totals: {
+    billedMinor: number;
+    returnedMinor: number;
+    netMinor: number;
+    paidMinor: number;
+    balanceMinor: number;
+  };
+  /** Per supplier, for the period. */
+  bySupplier: {
+    supplierPartyId: string;
+    supplierName?: string;
+    billedMinor: number;
+    returnedMinor: number;
+    balanceMinor: number;
+  }[];
 }

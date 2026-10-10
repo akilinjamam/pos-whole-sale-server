@@ -16,6 +16,12 @@ import type { Model, Types } from 'mongoose';
  * clearing, not on receipt (Day 30).
  */
 export interface AllocationDoc {
+  /**
+   * What is settled: an invoice (a receipt, money in), or a supplier's bill — a posted goods
+   * receipt (a supplier payment, money out, Day 35). `invoiceId` holds either: the same machinery
+   * settles both, and the direction of the payment says which it is.
+   */
+  kind: 'INVOICE' | 'GRN';
   invoiceId: Types.ObjectId;
   docNo: string;
   amountMinor: number;
@@ -74,7 +80,8 @@ export interface PaymentDocDoc {
 
 const allocationSchema = new Schema<AllocationDoc>(
   {
-    invoiceId: { type: Schema.Types.ObjectId, ref: 'Invoice', required: true },
+    kind: { type: String, enum: ['INVOICE', 'GRN'], default: 'INVOICE' },
+    invoiceId: { type: Schema.Types.ObjectId, required: true },
     docNo: { type: String, required: true },
     amountMinor: { type: Number, required: true, min: 1 },
     allocatedAt: { type: Date, required: true },

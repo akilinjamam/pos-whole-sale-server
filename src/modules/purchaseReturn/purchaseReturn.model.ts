@@ -44,6 +44,9 @@ export interface PurchaseReturnDoc {
   note: string | null;
   lines: PurchaseReturnLineDoc[];
   totalMinor: number;
+  /** Of the total, taken off the receipt's bill; the rest is credit on the supplier's account. */
+  appliedMinor: number;
+  unappliedMinor: number;
   postedAt: Date;
   postedBy: Types.ObjectId | null;
   createdBy: Types.ObjectId | null;
@@ -82,6 +85,8 @@ const purchaseReturnSchema = new Schema<PurchaseReturnDoc>(
     note: { type: String, trim: true, default: null },
     lines: { type: [lineSchema], default: [] },
     totalMinor: { type: Number, required: true, min: 0 },
+    appliedMinor: { type: Number, default: 0, min: 0 },
+    unappliedMinor: { type: Number, default: 0, min: 0 },
     postedAt: { type: Date, required: true },
     postedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
   },

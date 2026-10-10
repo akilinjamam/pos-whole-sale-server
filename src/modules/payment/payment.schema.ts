@@ -13,6 +13,9 @@ export {
   collectionSheetQuerySchema,
   depositChequeSchema,
   receiptSchema,
+  allocateSupplierPaymentSchema,
+  payablesPreviewQuerySchema,
+  supplierPaymentSchema,
 } from '../../shared/payments.js';
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid id');
@@ -30,6 +33,10 @@ export const listReceiptsQuerySchema = listQuerySchema.extend({
 });
 
 export type ListReceiptsQuery = z.infer<typeof listReceiptsQuerySchema>;
+
+/** Supplier payments (Day 35) list the same way; `unallocated` finds advances to suppliers. */
+export const listSupplierPaymentsQuerySchema = listReceiptsQuerySchema;
+export type ListSupplierPaymentsQuery = ListReceiptsQuery;
 
 /** The cheque register: by status, by party, and — `dueBy` — cheques dated on or before a day. */
 export const listChequesQuerySchema = listQuerySchema.extend({

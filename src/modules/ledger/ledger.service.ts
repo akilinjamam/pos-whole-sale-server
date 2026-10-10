@@ -498,7 +498,9 @@ export async function partyStatement(
         ? [address.line1, address.line2, address.city].filter(Boolean).join(', ')
         : null,
       creditLimitMinor: party.dealer?.creditLimitMinor ?? null,
-      paymentTermsDays: party.dealer?.paymentTermsDays ?? null,
+      paymentTermsDays:
+        party.dealer?.paymentTermsDays ?? party.supplier?.paymentTermsDays ?? null,
+      roles: party.roles,
     },
     from,
     to,

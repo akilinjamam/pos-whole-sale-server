@@ -173,3 +173,69 @@ export type AllocationInput = z.infer<typeof allocationInputSchema>;
 export type ReceiptInput = z.infer<typeof receiptSchema>;
 export type AllocateReceiptInput = z.infer<typeof allocateReceiptSchema>;
 export type AllocationPreviewQuery = z.infer<typeof allocationPreviewQuerySchema>;
+
+// ─── Supplier payments (Day 35) ─────────────────────────────────────────────────────────
+
+/**
+ * Money we pay a supplier (`PAY`, direction OUT), allocated against their bills — the posted goods
+ * receipts — with the same machinery as a receipt: explicit `allocations`, or oldest-due-first.
+ * What is not allocated is an advance to the supplier. Our own cheques post when issued: the
+ * cheque number goes in `reference`.
+ */
+export const SUPPLIER_PAYMENT_METHODS = ['CASH', 'BANK', 'CHEQUE', 'MFS'] as const;
+export type SupplierPaymentMethod = (typeof SUPPLIER_PAYMENT_METHODS)[number];
+
+export const payableAllocationInputSchema = z
+  .object({ grnId: objectId, amountMinor: minor })
+  .strict();
+
+const payableAllocations = z.array(payableAllocationInputSchema).max(MAX_ALLOCATIONS);
+
+export const supplierPaymentSchema = z
+  .object({
+    partyId: objectId,
+    amountMinor: minor,
+    method: z.enum(SUPPLIER_PAYMENT_METHODS),
+    paidAt: z
+      .string()
+      .datetime({ offset: true })
+      .refine((v) => new Date(v).getTime() <= Date.now() + 60_000, 'Cannot be in the future')
+      .optional(),
+    /** Omitted: oldest-due-first. Empty: none — all of it an advance. */
+    allocations: payableAllocations.optional(),
+    /** The cheque number, the bank transfer reference. */
+    reference: z.string().trim().max(80).nullable().optional(),
+    mfs: z
+      .object({
+        provider: z.enum(MFS_PROVIDERS),
+        trxId: z.string().trim().toUpperCase().min(4).max(40),
+        senderNumber: z.string().trim().max(20).nullable().optional(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
+    narration: z.string().trim().max(300).nullable().optional(),
+  })
+  .strict()
+  .refine((r) => r.method !== 'CHEQUE' || Boolean(r.reference?.trim()), {
+    path: ['reference'],
+    message: 'Which cheque? Give its number',
+  })
+  .refine((r) => r.method !== 'MFS' || Boolean(r.mfs), {
+    path: ['mfs'],
+    message: 'A bKash / Nagad / Rocket payment needs its transaction id',
+  })
+  .refine((r) => r.method === 'MFS' || !r.mfs, {
+    path: ['mfs'],
+    message: 'Only a mobile-money payment has an MFS transaction',
+  });
+
+export const allocateSupplierPaymentSchema = z
+  .object({ allocations: payableAllocations.min(1).optional() })
+  .strict();
+
+export const payablesPreviewQuerySchema = allocationPreviewQuerySchema;
+
+export type PayableAllocationInput = z.infer<typeof payableAllocationInputSchema>;
+export type SupplierPaymentInput = z.infer<typeof supplierPaymentSchema>;
+export type AllocateSupplierPaymentInput = z.infer<typeof allocateSupplierPaymentSchema>;
