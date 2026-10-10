@@ -37,6 +37,12 @@ export interface VariantDoc {
    * plano, and thin frames in a large size carry a premium — signed, so it can also discount.
    */
   priceDeltaMinor: number;
+  /**
+   * Moving-average cost of this variant across every location (Day 33, `domain/costing.ts`) —
+   * written only by a goods receipt posting, never by a variant edit. Products without variants
+   * keep theirs on `Product.avgCostMinor`.
+   */
+  avgCostMinor: number;
   isActive: boolean;
   createdBy: Types.ObjectId | null;
   updatedBy: Types.ObjectId | null;
@@ -55,6 +61,7 @@ const variantSchema = new Schema<VariantDoc>({
   axes: { type: Schema.Types.Mixed, required: true, default: {} },
   barcode: { type: String, trim: true, default: null },
   priceDeltaMinor: { type: Number, default: 0 },
+  avgCostMinor: { type: Number, default: 0, min: 0 },
   isActive: { type: Boolean, default: true, index: true },
 });
 

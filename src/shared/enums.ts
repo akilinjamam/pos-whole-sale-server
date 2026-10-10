@@ -237,6 +237,8 @@ export const LEDGER_DOC_TYPES = [
   'ADJUSTMENT',
   'CHEQUE_BOUNCE',
   'WRITE_OFF',
+  /** A supplier's bill for goods received (Day 33): credits the supplier — we owe them. */
+  'PURCHASE',
 ] as const;
 export type LedgerDocType = Member<typeof LEDGER_DOC_TYPES>;
 
@@ -255,6 +257,17 @@ export const PO_STATUSES = [
   'CANCELLED',
 ] as const;
 export type PoStatus = Member<typeof PO_STATUSES>;
+
+/** A goods receipt: a draft until posted; posting is final — a mistake goes back as a return. */
+export const GRN_STATUSES = ['DRAFT', 'POSTED', 'CANCELLED'] as const;
+export type GrnStatus = Member<typeof GRN_STATUSES>;
+
+/**
+ * What the store keeper found in the box. DAMAGED goods are refused at the door: recorded on the
+ * receipt, but not stocked, not counted as received against the PO, and not owed to the supplier.
+ */
+export const QC_STATUSES = ['OK', 'DAMAGED'] as const;
+export type QcStatus = Member<typeof QC_STATUSES>;
 
 // ─── Returns ────────────────────────────────────────────────────────────────────────────
 

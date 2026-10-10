@@ -30,6 +30,8 @@ import type {
   PaymentMethod,
   PaymentStatus,
   PoStatus,
+  GrnStatus,
+  QcStatus,
   SalesChannel,
   OrderStatus,
   DocumentStatus,
@@ -1750,6 +1752,66 @@ export interface PurchaseOrderPayload {
   closedAt: string | null;
   statusHistory: PoStatusHistoryPayload[];
   availableActions: { action: string; to: PoStatus; requiresReason: boolean }[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ─── Goods receipts (Day 33) ────────────────────────────────────────────────────────────
+
+/** Money is `null` for a caller without `stock:viewCost`, as on purchase orders. */
+export interface GrnLinePayload {
+  lineNo: number;
+  poLineId: string | null;
+  productId: string;
+  variantId: string | null;
+  productName?: string;
+  sku?: string;
+  uomCode: string;
+  qty: number;
+  qtyBase: number;
+  unitCostMinor: number | null;
+  discountPct: number;
+  lineTotalMinor: number | null;
+  /** Per base unit, with its share of the other charges — set when posted. */
+  landedUnitCostMinor: number | null;
+  lotNo: string | null;
+  mfgDate: string | null;
+  expiryDate: string | null;
+  serials: string[];
+  qcStatus: QcStatus;
+}
+
+export interface GoodsReceiptPayload {
+  id: string;
+  docNo: string | null;
+  poId: string | null;
+  poDocNo: string | null;
+  supplierPartyId: string;
+  supplierName?: string;
+  locationId: string;
+  locationName?: string;
+  status: GrnStatus;
+  receivedAt: string;
+  supplierInvoiceNo: string | null;
+  supplierInvoiceDate: string | null;
+  lines: GrnLinePayload[];
+  costHidden: boolean;
+  /** Over the accepted (OK) lines only — damaged goods are not owed. */
+  subtotalMinor: number | null;
+  discountMinor: number | null;
+  otherChargesMinor: number | null;
+  taxMinor: number | null;
+  grandTotalMinor: number | null;
+  /** What is still owed on it — Day 35's supplier payments allocate against this. */
+  balanceMinor: number | null;
+  paidMinor: number | null;
+  paymentStatus: PaymentStatus;
+  dueDate: string | null;
+  note: string | null;
+  postedAt: string | null;
+  postedByUserId: string | null;
+  cancelledAt: string | null;
+  cancelReason: string | null;
   createdAt: string;
   updatedAt: string;
 }

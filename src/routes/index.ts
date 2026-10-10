@@ -6,6 +6,7 @@ import barcodeRouter from '../modules/barcode/barcode.route.js';
 import brandRouter from '../modules/brand/brand.route.js';
 import categoryRouter from '../modules/category/category.route.js';
 import dispatchRouter from '../modules/dispatch/dispatch.route.js';
+import goodsReceiptRouter from '../modules/goodsReceipt/goodsReceipt.route.js';
 import healthRouter from '../modules/health/health.route.js';
 import invoiceRouter from '../modules/invoice/invoice.route.js';
 import ledgerRouter from '../modules/ledger/ledger.route.js';
@@ -123,6 +124,10 @@ export const allRoutes: RouteEntry[] = [
   // Purchase orders (Day 32). Status moves only through `domain/poStateMachine.ts`; receiving is
   // done by a posted goods receipt (Day 33), not here.
   { path: 'purchase-orders', route: supplierPoRouter },
+
+  // Goods receipts (Day 33): posting brings stock in, re-costs it, moves the PO and credits the
+  // supplier — in one transaction.
+  { path: 'goods-receipts', route: goodsReceiptRouter },
 ];
 
 /** Paths that skip authentication, as full mount prefixes. */
