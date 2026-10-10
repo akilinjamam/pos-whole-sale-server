@@ -7,6 +7,7 @@ import brandRouter from '../modules/brand/brand.route.js';
 import categoryRouter from '../modules/category/category.route.js';
 import dispatchRouter from '../modules/dispatch/dispatch.route.js';
 import goodsReceiptRouter from '../modules/goodsReceipt/goodsReceipt.route.js';
+import purchaseReturnRouter from '../modules/purchaseReturn/purchaseReturn.route.js';
 import healthRouter from '../modules/health/health.route.js';
 import invoiceRouter from '../modules/invoice/invoice.route.js';
 import ledgerRouter from '../modules/ledger/ledger.route.js';
@@ -128,6 +129,8 @@ export const allRoutes: RouteEntry[] = [
   // Goods receipts (Day 33): posting brings stock in, re-costs it, moves the PO and credits the
   // supplier — in one transaction.
   { path: 'goods-receipts', route: goodsReceiptRouter },
+  // Goods going back to the supplier (Day 34): stock out, cost, a debit note.
+  { path: 'purchase-returns', route: purchaseReturnRouter },
 ];
 
 /** Paths that skip authentication, as full mount prefixes. */

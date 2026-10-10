@@ -68,3 +68,29 @@ export function landedValues(
   const shares = prorate(otherChargesMinor, lineNetMinor);
   return lineNetMinor.map((net, i) => net + shares[i]!);
 }
+
+/**
+ * The average after `qtyOut` units go back to the supplier, who credits `valueOutMinor` for them
+ * (a purchase return). Returned at exactly the average, it does not move; returned at the price
+ * they were bought for, what is left carries the difference — the freight paid to bring them in,
+ * say, which the supplier does not refund. Nothing left on the shelf: the average stands, ready
+ * for the next return or receipt. Never below zero.
+ */
+export function movingAverageOut(
+  before: CostedStock,
+  qtyOut: number,
+  valueOutMinor: number,
+): number {
+  if (!Number.isInteger(qtyOut) || qtyOut < 1) {
+    throw new RangeError('movingAverageOut: a whole quantity of 1 or more leaving');
+  }
+  if (!Number.isInteger(valueOutMinor) || valueOutMinor < 0) {
+    throw new RangeError('movingAverageOut: a whole, non-negative value leaving');
+  }
+  const left = before.qtyOnHand - qtyOut;
+  if (left <= 0) return before.avgCostMinor;
+  return Math.max(
+    0,
+    roundHalfUp((before.qtyOnHand * before.avgCostMinor - valueOutMinor) / left),
+  );
+}

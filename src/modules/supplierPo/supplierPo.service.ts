@@ -16,7 +16,7 @@ import { dayIn, dayToDate } from '../../lib/period.js';
 import { withTransaction } from '../../lib/withTransaction.js';
 import { assertLocationAllowed, locationScopeOf } from '../../middleware/requireLocation.js';
 import { hasPermission } from '../../middleware/requirePermission.js';
-import { resolveStockLines } from '../../services/stockLines.js';
+import { lineNames, resolveStockLines } from '../../services/stockLines.js';
 import { applyPct } from '../../shared/money.js';
 import { Location } from '../location/location.model.js';
 import { Org } from '../org/org.model.js';
@@ -167,23 +167,20 @@ async function serialize(
   const ids = (pick: (d: PurchaseOrderDoc) => Types.ObjectId[]) => [
     ...new Set(docs.flatMap(pick).map(String)),
   ];
-  const [suppliers, locations, products] = await Promise.all([
+  const [suppliers, locations, names] = await Promise.all([
     Party.find({ orgId: actor.orgId, _id: { $in: ids((d) => [d.supplierPartyId]) } })
       .select('name')
       .lean(),
     Location.find({ orgId: actor.orgId, _id: { $in: ids((d) => [d.locationId]) } })
       .select('name')
       .lean(),
-    Product.find({
-      orgId: actor.orgId,
-      _id: { $in: ids((d) => d.lines.map((l) => l.productId)) },
-    })
-      .select('name sku')
-      .lean(),
+    lineNames(
+      actor.orgId,
+      docs.flatMap((d) => d.lines),
+    ),
   ]);
   const supplierName = new Map(suppliers.map((p) => [String(p._id), p.name]));
   const locationName = new Map(locations.map((l) => [String(l._id), l.name]));
-  const product = new Map(products.map((p) => [String(p._id), p]));
   const seesCost = hasPermission(actor.user, 'stock:viewCost');
   const money = (n: number) => (seesCost ? n : null);
 
@@ -200,14 +197,15 @@ async function serialize(
       orderDate: d.orderDate.toISOString(),
       expectedDate: iso(d.expectedDate),
       lines: d.lines.map((l) => {
-        const p = product.get(String(l.productId));
+        const n = names(l);
         return {
           id: String(l._id),
           lineNo: l.lineNo,
           productId: String(l.productId),
           variantId: l.variantId ? String(l.variantId) : null,
-          productName: p?.name,
-          sku: p?.sku,
+          productName: n.productName,
+          sku: n.sku,
+          variantLabel: n.variantLabel ?? null,
           uomCode: l.uomCode,
           uomQty: l.uomQty,
           qtyBase: l.qtyBase,

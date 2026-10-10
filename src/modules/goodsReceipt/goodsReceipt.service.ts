@@ -118,6 +118,7 @@ async function serialize(
         variantId: l.variantId ? String(l.variantId) : null,
         productName: n.productName,
         sku: n.sku,
+        variantLabel: n.variantLabel ?? null,
         uomCode: l.uomCode,
         qty: l.qty,
         qtyBase: l.qtyBase,
@@ -130,6 +131,7 @@ async function serialize(
         expiryDate: dateToDay(l.expiryDate),
         serials: l.serials,
         qcStatus: l.qcStatus,
+        qtyReturnedBase: l.qtyReturnedBase ?? 0,
       };
     }),
     costHidden: !seesCost,
@@ -231,7 +233,7 @@ async function loadReceivablePo(actor: RequestActor, id: string | Types.ObjectId
 }
 
 /** The item's stock across every location, as one average — inside the caller's session. */
-async function itemCost(
+export async function itemCost(
   orgId: Types.ObjectId,
   productId: Types.ObjectId,
   variantId: Types.ObjectId | null,
@@ -242,6 +244,27 @@ async function itemCost(
     .session(session ?? null)
     .lean();
   return currentCost(rows);
+}
+
+/** An item's new moving average, mirrored everywhere it is read: every balance row, and the
+ * variant (or the product, for an item without variants). */
+export async function setAverageCost(
+  session: ClientSession,
+  orgId: Types.ObjectId,
+  productId: Types.ObjectId,
+  variantId: Types.ObjectId | null,
+  avgCostMinor: number,
+): Promise<void> {
+  await StockBalance.updateMany(
+    { orgId, productId, variantId: variantId ?? null },
+    { $set: { avgCostMinor } },
+    { session },
+  );
+  if (variantId) {
+    await Variant.updateOne({ _id: variantId }, { $set: { avgCostMinor } }, { session });
+  } else {
+    await Product.updateOne({ _id: productId }, { $set: { avgCostMinor } }, { session });
+  }
 }
 
 interface BuiltLines {
@@ -386,6 +409,7 @@ async function buildLines(
       expiryDate: r.lotNo ? dayToDate(line.expiryDate ?? null) : null,
       serials: r.serials,
       qcStatus,
+      qtyReturnedBase: 0,
     });
   }
   if (errors.length > 0) throw ApiError.validation('Validation failed', errors);
@@ -771,25 +795,13 @@ async function postInSession(session: ClientSession, actor: RequestActor, id: Ty
     arriving.set(k, a);
   });
   for (const [k, a] of arriving) {
-    const avg = movingAverage(before.get(k)!, a.qty, a.value);
-    await StockBalance.updateMany(
-      { orgId: actor.orgId, productId: a.productId, variantId: a.variantId ?? null },
-      { $set: { avgCostMinor: avg } },
-      { session },
+    await setAverageCost(
+      session,
+      actor.orgId,
+      a.productId,
+      a.variantId,
+      movingAverage(before.get(k)!, a.qty, a.value),
     );
-    if (a.variantId) {
-      await Variant.updateOne(
-        { _id: a.variantId },
-        { $set: { avgCostMinor: avg } },
-        { session },
-      );
-    } else {
-      await Product.updateOne(
-        { _id: a.productId },
-        { $set: { avgCostMinor: avg } },
-        { session },
-      );
-    }
   }
 
   // ── 5. The PO follows ──

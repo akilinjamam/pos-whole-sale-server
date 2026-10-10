@@ -8,7 +8,7 @@
 
 import { z } from 'zod';
 
-import { QC_STATUSES } from './enums.js';
+import { QC_STATUSES, RETURN_REASONS } from './enums.js';
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid id');
 const minor = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
@@ -127,3 +127,51 @@ export type GrnLineInput = z.infer<typeof grnLineInputSchema>;
 export type CreateGrnInput = z.infer<typeof createGrnSchema>;
 export type UpdateGrnInput = z.infer<typeof updateGrnSchema>;
 export type CancelGrnInput = z.infer<typeof cancelGrnSchema>;
+
+// ─── Purchase returns (Day 34) ──────────────────────────────────────────────────────────
+
+/**
+ * Goods going back to the supplier. Against a posted receipt, each line names the receipt line it
+ * returns (`grnLineNo`) and its value is that line's own net cost — what the supplier billed for
+ * those units — so no cost is typed. A direct return (no receipt) is valued at the item's current
+ * cost unless someone who may see costs types the supplier's credit.
+ */
+export const purchaseReturnLineInputSchema = z
+  .object({
+    grnLineNo: z.number().int().min(1).nullable().optional(),
+    productId: objectId,
+    variantId: objectId.nullable().optional(),
+    uomCode: z.string().trim().toUpperCase().max(10).nullable().optional(),
+    qty: z.number().int('Whole units only').min(1, 'At least 1').max(10_000_000),
+    /** Per `uomCode`, direct returns only. Needs `stock:viewCost`. */
+    unitCostMinor: minor.optional(),
+    lotNo: z.string().trim().toUpperCase().max(40).nullable().optional(),
+    serials: z.array(z.string().trim().toUpperCase().min(1).max(60)).max(10_000).optional(),
+  })
+  .strict();
+
+export const createPurchaseReturnSchema = z
+  .object({
+    /** The posted receipt the goods came in on; null (or absent) for a direct return. */
+    grnId: objectId.nullable().optional(),
+    /** Taken from the receipt when there is one. */
+    supplierPartyId: objectId.optional(),
+    /** Where the goods leave from. Default: the receipt's warehouse. */
+    locationId: objectId.optional(),
+    /** Defaults to today. */
+    returnDate: day.optional(),
+    reason: z.enum(RETURN_REASONS),
+    note: z.string().trim().max(500).nullable().optional(),
+    lines: z
+      .array(purchaseReturnLineInputSchema)
+      .min(1, 'Return at least one line')
+      .max(MAX_PO_LINES),
+  })
+  .strict()
+  .refine((r) => r.grnId || (r.supplierPartyId && r.locationId), {
+    message: 'A direct return names its supplier and warehouse',
+    path: ['supplierPartyId'],
+  });
+
+export type PurchaseReturnLineInput = z.infer<typeof purchaseReturnLineInputSchema>;
+export type CreatePurchaseReturnInput = z.infer<typeof createPurchaseReturnSchema>;

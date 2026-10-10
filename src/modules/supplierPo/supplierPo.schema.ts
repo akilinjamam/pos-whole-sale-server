@@ -20,6 +20,16 @@ export const listPoQuerySchema = listQuerySchema.extend({
 
 export type ListPoQuery = z.infer<typeof listPoQuerySchema>;
 
+export const reorderQuerySchema = z
+  .object({
+    /** Judge stock at one location; default: every sellable location the caller can see. */
+    locationId: objectId.optional(),
+    q: z.string().trim().max(100).optional(),
+  })
+  .strict();
+
+export type ReorderQuery = z.infer<typeof reorderQuerySchema>;
+
 export {
   cancelPoSchema,
   createPoSchema,

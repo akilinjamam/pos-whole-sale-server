@@ -14,11 +14,13 @@ import {
   idParamSchema,
   listPoQuerySchema,
   poReasonSchema,
+  reorderQuerySchema,
   updatePoSchema,
 } from './supplierPo.schema.js';
+import { reorderSuggestions } from './reorder.service.js';
 import * as service from './supplierPo.service.js';
 
-import type { ListPoQuery } from './supplierPo.schema.js';
+import type { ListPoQuery, ReorderQuery } from './supplierPo.schema.js';
 import type { Request } from 'express';
 
 /**
@@ -44,6 +46,20 @@ router.get(
       req.query as unknown as ListPoQuery,
     );
     sendPage(res, page.items, page.meta);
+  }),
+);
+// Before `/:id`, or "reorder-suggestions" would be read as an id.
+router.get(
+  '/reorder-suggestions',
+  authenticate,
+  requirePermission('po:read'),
+  requireLocation,
+  validate({ query: reorderQuerySchema }),
+  asyncHandler(async (req, res) => {
+    sendData(
+      res,
+      await reorderSuggestions(requestActorOf(req), req.query as unknown as ReorderQuery),
+    );
   }),
 );
 router.get(

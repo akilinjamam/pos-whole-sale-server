@@ -39,6 +39,8 @@ export interface GrnLineDoc {
   expiryDate: Date | null;
   serials: string[];
   qcStatus: QcStatus;
+  /** Sent back since, by purchase returns (Day 34) — never more than `qtyBase`. */
+  qtyReturnedBase: number;
 }
 
 export interface GoodsReceiptDoc {
@@ -93,6 +95,7 @@ const lineSchema = new Schema<GrnLineDoc>(
     expiryDate: { type: Date, default: null },
     serials: { type: [String], default: [] },
     qcStatus: { type: String, enum: QC_STATUSES, default: 'OK' },
+    qtyReturnedBase: { type: Number, default: 0, min: 0 },
   },
   { _id: false },
 );

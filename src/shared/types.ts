@@ -32,6 +32,7 @@ import type {
   PoStatus,
   GrnStatus,
   QcStatus,
+  ReturnReason,
   SalesChannel,
   OrderStatus,
   DocumentStatus,
@@ -1697,6 +1698,7 @@ export interface PoLinePayload {
   variantId: string | null;
   productName?: string;
   sku?: string;
+  variantLabel?: string | null;
   uomCode: string;
   uomQty: number;
   qtyBase: number;
@@ -1766,6 +1768,7 @@ export interface GrnLinePayload {
   variantId: string | null;
   productName?: string;
   sku?: string;
+  variantLabel?: string | null;
   uomCode: string;
   qty: number;
   qtyBase: number;
@@ -1779,6 +1782,8 @@ export interface GrnLinePayload {
   expiryDate: string | null;
   serials: string[];
   qcStatus: QcStatus;
+  /** Sent back to the supplier since (Day 34), in base units. */
+  qtyReturnedBase: number;
 }
 
 export interface GoodsReceiptPayload {
@@ -1814,4 +1819,75 @@ export interface GoodsReceiptPayload {
   cancelReason: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+// ─── Purchase returns (Day 34) ──────────────────────────────────────────────────────────
+
+export interface PurchaseReturnLinePayload {
+  lineNo: number;
+  /** The receipt line returned, when against a receipt. */
+  grnLineNo: number | null;
+  productId: string;
+  variantId: string | null;
+  productName?: string;
+  sku?: string;
+  variantLabel?: string | null;
+  uomCode: string;
+  qty: number;
+  qtyBase: number;
+  /** Per `uomCode`. Null without `stock:viewCost`. */
+  unitCostMinor: number | null;
+  lineTotalMinor: number | null;
+  lotNo: string | null;
+  serials: string[];
+}
+
+export interface PurchaseReturnPayload {
+  id: string;
+  docNo: string;
+  grnId: string | null;
+  grnDocNo: string | null;
+  supplierPartyId: string;
+  supplierName?: string;
+  locationId: string;
+  locationName?: string;
+  status: DocumentStatus;
+  returnDate: string;
+  reason: ReturnReason;
+  note: string | null;
+  lines: PurchaseReturnLinePayload[];
+  costHidden: boolean;
+  /** The debit note: what the supplier now owes back, or takes off what we owe them. */
+  totalMinor: number | null;
+  postedAt: string;
+  postedByUserId: string | null;
+  createdAt: string;
+}
+
+// ─── Reorder suggestions (Day 34) ───────────────────────────────────────────────────────
+
+/** One product below its reorder point. Every quantity is in base units. */
+export interface ReorderSuggestionPayload {
+  productId: string;
+  sku: string;
+  name: string;
+  baseUom: BaseUom;
+  hasVariants: boolean;
+  trackingMode: TrackingMode;
+  reorderPoint: number;
+  reorderQty: number;
+  leadTimeDays: number;
+  onHandBase: number;
+  reservedBase: number;
+  /** Still to come on approved, sent and part-received purchase orders. */
+  onOrderBase: number;
+  /** on hand − reserved + on order: what the reorder point is compared with. */
+  positionBase: number;
+  /** The reorder quantity, or enough to reach the reorder point if that is more. */
+  suggestedBase: number;
+  /** Who it was last ordered from, to group suggestions into POs. */
+  lastSupplierPartyId: string | null;
+  lastSupplierName: string | null;
+  /** Null without `stock:viewCost`. */
+  avgCostMinor: number | null;
 }

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { currentCost, landedValues, movingAverage } from '../src/domain/costing.js';
+import {
+  currentCost,
+  landedValues,
+  movingAverage,
+  movingAverageOut,
+} from '../src/domain/costing.js';
 
 /** Day 33: moving-average cost, one per item across every location, and landed cost. */
 
@@ -61,5 +66,32 @@ describe('landedValues', () => {
 
   it('free goods only: the charges are spread evenly', () => {
     expect(landedValues([0, 0, 0], 100)).toEqual([34, 33, 33]);
+  });
+});
+
+describe('movingAverageOut', () => {
+  it('returned at the average, the average stands', () => {
+    expect(movingAverageOut({ qtyOnHand: 20, avgCostMinor: 4_000 }, 5, 20_000)).toBe(4_000);
+  });
+
+  it('returned at the bill price, what is left carries the freight the supplier keeps', () => {
+    // 12 frames landed at ৳40.25 (bill ৳38 + freight); 2 go back for ৳76 — the 10 left absorb it.
+    expect(movingAverageOut({ qtyOnHand: 12, avgCostMinor: 4_025 }, 2, 7_600)).toBe(4_070);
+  });
+
+  it('nothing left: the average stands for the next document', () => {
+    expect(movingAverageOut({ qtyOnHand: 3, avgCostMinor: 4_000 }, 3, 15_000)).toBe(4_000);
+    expect(movingAverageOut({ qtyOnHand: 0, avgCostMinor: 4_000 }, 1, 15_000)).toBe(4_000);
+  });
+
+  it('never below zero', () => {
+    expect(movingAverageOut({ qtyOnHand: 2, avgCostMinor: 100 }, 1, 1_000)).toBe(0);
+  });
+
+  it('refuses nonsense leaving', () => {
+    expect(() => movingAverageOut({ qtyOnHand: 1, avgCostMinor: 1 }, 0, 1)).toThrow(RangeError);
+    expect(() => movingAverageOut({ qtyOnHand: 1, avgCostMinor: 1 }, 1, -1)).toThrow(
+      RangeError,
+    );
   });
 });
