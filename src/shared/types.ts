@@ -24,6 +24,7 @@ import type {
   DispatchStatus,
   FulfillmentStatus,
   AgeingBucket,
+  AuditAction,
   ChequeStatus,
   LedgerDocType,
   PaymentMethod,
@@ -1163,7 +1164,9 @@ export interface OrderCounts {
 export interface OrderCreditCheckPayload {
   status: CreditCheckStatus;
   checkedAt: string;
+  /** The dealer's exposure before this order, when it was checked (Day 31: not just the balance). */
   outstandingMinor: number;
+  /** Exposure with this order — what the limit was judged against. */
   exposureMinor: number;
   limitMinor: number;
   overriddenByUserId: string | null;
@@ -1242,11 +1245,20 @@ export interface OrderQuoteLine {
 }
 
 export interface OrderCreditPosition {
+  /** The ledger balance — what they owe on account today. */
   balanceMinor: number;
   limitMinor: number;
   creditHold: boolean;
-  /** Balance + this order. Day 31 widens it to open orders and unallocated receipts. */
+  /** Exposure (Day 31): open invoices + not-yet-invoiced confirmed orders − advances on account. */
+  openInvoicesMinor: number;
+  openOrdersMinor: number;
+  unallocatedMinor: number;
+  /** Exposure before this order. */
+  exposureMinor: number;
+  /** Exposure with this order — what the limit is judged against. */
   exposureAfterMinor: number;
+  /** How far past the limit this order would go; 0 when within it. */
+  shortfallMinor: number;
   verdict: 'OK' | 'ON_HOLD' | 'OVER_LIMIT' | 'CASH_ONLY';
   message: string | null;
   /** Whether this caller could confirm past a refusal (holds `order:creditOverride`). */
@@ -1600,4 +1612,71 @@ export interface AgeingReport {
   totalMinor: number;
   rows: AgeingRow[];
   generatedAt: string;
+}
+
+// ─── Audit (Day 31) ─────────────────────────────────────────────────────────────────────
+
+export interface AuditEntryPayload {
+  id: string;
+  at: string;
+  actorUserId: string | null;
+  actorName: string | null;
+  action: AuditAction;
+  entity: string;
+  entityId: string | null;
+  docNo: string | null;
+  reason: string | null;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+  ip: string | null;
+  userAgent: string | null;
+  requestId: string | null;
+}
+
+/** One credit override, as the managers' dashboard shows it. */
+export interface CreditOverrideRow {
+  id: string;
+  at: string;
+  /** Where the limit was overruled: at confirm, approving a parked order, or posting a challan. */
+  stage: 'CONFIRM' | 'APPROVE' | 'DISPATCH';
+  byUserId: string | null;
+  byName: string | null;
+  reason: string;
+  orderId: string | null;
+  orderDocNo: string | null;
+  /** The order as it stands now — did the goods go, was it cancelled? */
+  orderStatus: OrderStatus | null;
+  orderTotalMinor: number;
+  dealerPartyId: string | null;
+  dealerName: string | null;
+  limitMinor: number;
+  exposureAfterMinor: number;
+  shortfallMinor: number;
+}
+
+export interface CreditOverrideDealer {
+  partyId: string;
+  name: string;
+  code: string;
+  overrides: number;
+  /** Their position now, not at the time: still over, or paid back down? */
+  limitMinor: number;
+  exposureNowMinor: number;
+  overNowMinor: number;
+}
+
+export interface CreditOverrideDashboard {
+  from: string;
+  to: string;
+  count: number;
+  /** Σ how far past the limit each override lent. */
+  shortfallMinor: number;
+  byApprover: {
+    userId: string | null;
+    name: string | null;
+    count: number;
+    shortfallMinor: number;
+  }[];
+  dealers: CreditOverrideDealer[];
+  rows: CreditOverrideRow[];
 }

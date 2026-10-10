@@ -12,7 +12,9 @@ import { paginate } from '../../lib/paginate.js';
 import { withTransaction } from '../../lib/withTransaction.js';
 import { locationScopeOf } from '../../middleware/requireLocation.js';
 import { postLedgerEntries } from '../../services/partyLedger.service.js';
+import { creditExposure } from '../../services/creditExposure.service.js';
 import { postMovements } from '../../services/stock.service.js';
+import { hasPermission } from '../../middleware/requirePermission.js';
 import { resolveStockLines, trackingFor } from '../../services/stockLines.js';
 import { packFactor } from '../../shared/uom.js';
 import { Invoice } from '../invoice/invoice.model.js';
@@ -24,7 +26,11 @@ import { Product } from '../product/product.model.js';
 import { StockBalance } from '../stock/stockBalance.model.js';
 import { Variant } from '../variant/variant.model.js';
 import { WholesaleOrder } from '../wholesaleOrder/wholesaleOrder.model.js';
-import { getOrder, transitionOrder } from '../wholesaleOrder/wholesaleOrder.service.js';
+import {
+  auditCreditOverride,
+  getOrder,
+  transitionOrder,
+} from '../wholesaleOrder/wholesaleOrder.service.js';
 
 import { Dispatch, toDispatchPayload } from './dispatch.model.js';
 
@@ -41,6 +47,7 @@ import type {
   CancelDispatchInput,
   CreateDispatchInput,
   DeliverDispatchInput,
+  PostDispatchInput,
   DispatchLineInput,
   UpdateDispatchInput,
 } from '@shared/dispatch.js';
@@ -426,6 +433,82 @@ export async function cancelDispatch(
   return one(actor, updated);
 }
 
+// ─── Credit at dispatch (Day 31) ────────────────────────────────────────────────────────
+
+/**
+ * The dealer's credit, re-checked as the goods leave (§8): the balance may have moved since the
+ * order was confirmed — a cheque bounced, another order confirmed, the limit cut.
+ *
+ *   on hold            refused, always: a hold is a person's decision, and goods do not leave.
+ *   order overridden   passes: a manager already lent this order past the limit, knowingly.
+ *   otherwise          exposure (this order already in it, as an open order) against the limit;
+ *                      over it, refused — unless the caller holds `order:creditOverride` and gives
+ *                      a reason, which is recorded on the order and in the audit log.
+ */
+async function checkCreditAtDispatch(
+  session: ClientSession,
+  actor: RequestActor,
+  order: WholesaleOrderDoc,
+  enforce: boolean,
+  overrideReason: string | undefined,
+): Promise<void> {
+  const dealer = (await Party.findById(order.dealerPartyId).session(session).lean())!;
+  if (dealer.dealer?.creditHold) {
+    throw ApiError.conflict(
+      'CREDIT_LIMIT_EXCEEDED',
+      `${dealer.name} is on credit hold${dealer.dealer.creditHoldReason ? `: ${dealer.dealer.creditHoldReason}` : ''} — nothing leaves until it is lifted`,
+      { reason: 'ON_HOLD', canOverride: false },
+    );
+  }
+  if (!enforce || order.creditCheck?.status === 'OVERRIDDEN') return;
+
+  const exposure = await creditExposure(actor.orgId, dealer._id, { session });
+  const limitMinor = dealer.dealer?.creditLimitMinor ?? 0;
+  if (exposure.exposureMinor <= limitMinor) return;
+
+  const shortfallMinor = exposure.exposureMinor - limitMinor;
+  const canOverride = hasPermission(actor.user, 'order:creditOverride');
+  if (!canOverride || !overrideReason) {
+    throw ApiError.conflict(
+      'CREDIT_LIMIT_EXCEEDED',
+      `${dealer.name} is now over their credit limit — this challan cannot leave on credit`,
+      {
+        reason: 'OVER_LIMIT',
+        canOverride,
+        exposureMinor: exposure.exposureMinor,
+        limitMinor,
+        shortfallMinor,
+      },
+    );
+  }
+  const credit = {
+    verdict: 'OVER_LIMIT',
+    limitMinor,
+    exposureMinor: exposure.exposureMinor,
+    exposureAfterMinor: exposure.exposureMinor,
+    shortfallMinor,
+  };
+  await WholesaleOrder.updateOne(
+    { _id: order._id, orgId: actor.orgId },
+    {
+      $set: {
+        creditCheck: {
+          status: 'OVERRIDDEN',
+          checkedAt: new Date(),
+          outstandingMinor: exposure.exposureMinor,
+          exposureMinor: exposure.exposureMinor,
+          limitMinor,
+          overriddenByUserId: actor.actorId,
+          overrideReason,
+        },
+        updatedBy: actor.actorId,
+      },
+    },
+    { session },
+  );
+  await auditCreditOverride(session, actor, order, 'DISPATCH', overrideReason, credit);
+}
+
 // ─── Post ───────────────────────────────────────────────────────────────────────────────
 
 export interface PostDispatchOptions {
@@ -437,9 +520,13 @@ export async function postDispatch(
   actor: RequestActor,
   id: Types.ObjectId,
   options: PostDispatchOptions = {},
+  input: PostDispatchInput = {},
 ): Promise<DispatchPostResult> {
-  const org = await Org.findById(actor.orgId).select('settings.invoiceOnDispatch').lean();
+  const org = await Org.findById(actor.orgId)
+    .select('settings.invoiceOnDispatch settings.enforceCreditLimit')
+    .lean();
   const invoicing = org?.settings?.invoiceOnDispatch ?? true;
+  const enforce = org?.settings?.enforceCreditLimit ?? true;
 
   const posted = await withTransaction(async (session) => {
     const now = new Date();
@@ -454,6 +541,7 @@ export async function postDispatch(
 
     // ── 1. The order, as of this transaction — and every line re-validated against it ──
     const order = await loadOrder(actor, d.orderId, session);
+    await checkCreditAtDispatch(session, actor, order, enforce, input.creditOverrideReason);
     const lineBy = new Map(order.lines.map((l) => [String(l._id), { ...l }]));
     const shipping = new Map<string, number>();
     for (const l of d.lines) {

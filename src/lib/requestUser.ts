@@ -48,8 +48,19 @@ export interface RequestActor {
   orgId: Types.ObjectId;
   actorId: Types.ObjectId;
   user: AuthUser;
+  /** Where the request came from — for the audit log. Absent for work not driven by a request. */
+  context?: { ip: string | null; userAgent: string | null; requestId: string | null };
 }
 
 export function requestActorOf(req: Request): RequestActor {
-  return { orgId: orgIdOf(req), actorId: actorIdOf(req), user: requireAuth(req) };
+  return {
+    orgId: orgIdOf(req),
+    actorId: actorIdOf(req),
+    user: requireAuth(req),
+    context: {
+      ip: req.ip ?? null,
+      userAgent: req.get('user-agent') ?? null,
+      requestId: (req as { id?: string }).id ?? null,
+    },
+  };
 }

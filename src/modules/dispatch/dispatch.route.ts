@@ -10,6 +10,7 @@ import {
   cancelDispatchSchema,
   createDispatchSchema,
   deliverDispatchSchema,
+  postDispatchSchema,
   idParamSchema,
   listDispatchesQuerySchema,
   updateDispatchSchema,
@@ -63,7 +64,7 @@ router.post(
   '/:id/post',
   authenticate,
   requirePermission('dispatch:post'),
-  validate({ params: idParamSchema }),
+  validate({ params: idParamSchema, body: postDispatchSchema }),
   ctrl.post,
 );
 router.post(

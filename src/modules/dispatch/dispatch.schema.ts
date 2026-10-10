@@ -7,6 +7,7 @@ export {
   cancelDispatchSchema,
   createDispatchSchema,
   deliverDispatchSchema,
+  postDispatchSchema,
   updateDispatchSchema,
 } from '../../shared/dispatch.js';
 

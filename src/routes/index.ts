@@ -1,5 +1,6 @@
 import type { Router } from 'express';
 
+import auditRouter from '../modules/audit/audit.route.js';
 import authRouter from '../modules/auth/auth.route.js';
 import barcodeRouter from '../modules/barcode/barcode.route.js';
 import brandRouter from '../modules/brand/brand.route.js';
@@ -114,6 +115,9 @@ export const allRoutes: RouteEntry[] = [
   // Receipts and allocation (Day 28): money in, set against invoices oldest-due-first or as
   // chosen; the rest held as an advance. One ledger credit per receipt.
   { path: 'payments', route: paymentRouter },
+
+  // The audit log (Day 31): read-only. Credit overrides write to it; Day 39 adds the rest.
+  { path: 'audit', route: auditRouter },
 ];
 
 /** Paths that skip authentication, as full mount prefixes. */

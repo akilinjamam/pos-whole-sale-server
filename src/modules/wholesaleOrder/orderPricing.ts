@@ -1,6 +1,7 @@
 import { Types } from 'mongoose';
 
 import { checkCredit } from '../../domain/creditCheck.js';
+import { creditExposure } from '../../services/creditExposure.service.js';
 import { computeTotals, PricingError } from '../../domain/pricing.js';
 import { ApiError } from '../../lib/ApiError.js';
 import { assertLocationAllowed } from '../../middleware/requireLocation.js';
@@ -17,6 +18,7 @@ import { Variant } from '../variant/variant.model.js';
 import type { OrderDiscountSpecDoc, OrderLineDoc } from './wholesaleOrder.model.js';
 import type { OrderDiscount } from '../../domain/pricing.js';
 import type { RequestActor } from '../../lib/requestUser.js';
+import type { ClientSession } from 'mongoose';
 import type { PartyDoc } from '../party/party.model.js';
 import type { OrderLineInput } from '@shared/orders.js';
 import type {
@@ -334,30 +336,42 @@ export function specOf(doc: OrderDiscountSpecDoc | null): OrderDiscountSpec | nu
 }
 
 /**
- * The dealer's credit against this order — **stubbed exposure** until Day 31: what they owe now
- * plus this order. Day 31 adds open orders and unallocated receipts to the same function.
+ * The dealer's credit against this order (§8, Day 31): their full exposure — open invoices, plus
+ * what confirmed orders will still invoice, less their money on account — with this order on top.
+ * Pass the transaction's session to judge the dealer as they stand inside it.
  */
 export async function creditPosition(
   actor: RequestActor,
   dealer: PartyDoc,
   orderTotalMinor: number,
+  opts: { session?: ClientSession; excludeOrderId?: Types.ObjectId } = {},
 ): Promise<OrderCreditPosition> {
-  const org = await Org.findById(actor.orgId).select('settings.enforceCreditLimit').lean();
+  const org = await Org.findById(actor.orgId)
+    .select('settings.enforceCreditLimit')
+    .session(opts.session ?? null)
+    .lean();
+  const exposure = await creditExposure(actor.orgId, dealer._id, opts);
+  const limitMinor = dealer.dealer?.creditLimitMinor ?? 0;
   const verdict = checkCredit(
     {
       creditHold: Boolean(dealer.dealer?.creditHold),
       creditHoldReason: dealer.dealer?.creditHoldReason ?? null,
-      creditLimitMinor: dealer.dealer?.creditLimitMinor ?? 0,
-      currentBalanceMinor: dealer.currentBalanceMinor,
+      creditLimitMinor: limitMinor,
+      exposureMinor: exposure.exposureMinor,
     },
     orderTotalMinor,
     org?.settings?.enforceCreditLimit ?? true,
   );
   return {
     balanceMinor: dealer.currentBalanceMinor,
-    limitMinor: dealer.dealer?.creditLimitMinor ?? 0,
+    limitMinor,
     creditHold: Boolean(dealer.dealer?.creditHold),
+    openInvoicesMinor: exposure.openInvoicesMinor,
+    openOrdersMinor: exposure.openOrdersMinor,
+    unallocatedMinor: exposure.unallocatedMinor,
+    exposureMinor: exposure.exposureMinor,
     exposureAfterMinor: verdict.exposureAfterMinor,
+    shortfallMinor: Math.max(0, verdict.exposureAfterMinor - limitMinor),
     verdict: verdict.ok ? 'OK' : verdict.reason,
     message: verdict.ok ? null : verdict.message,
     canOverride: hasPermission(actor.user, 'order:creditOverride'),

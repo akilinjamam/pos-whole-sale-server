@@ -74,7 +74,9 @@ export interface OrderStatusHistoryDoc {
 export interface OrderCreditCheckDoc {
   status: CreditCheckStatus;
   checkedAt: Date;
+  /** Exposure before this order (open invoices + open orders − advances), when checked. */
   outstandingMinor: number;
+  /** Exposure with this order. */
   exposureMinor: number;
   limitMinor: number;
   overriddenByUserId: Types.ObjectId | null;

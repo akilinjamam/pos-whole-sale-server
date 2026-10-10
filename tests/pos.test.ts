@@ -52,7 +52,7 @@ describe('checkCredit', () => {
     creditHold: false,
     creditHoldReason: null,
     creditLimitMinor: 5_000_000,
-    currentBalanceMinor: 4_000_000,
+    exposureMinor: 4_000_000,
   };
 
   it('allows credit within the limit', () => {
@@ -90,7 +90,7 @@ describe('checkCredit', () => {
 
   it('treats a zero limit as cash only', () => {
     expect(
-      checkCredit({ ...dealer, creditLimitMinor: 0, currentBalanceMinor: 0 }, 100, true),
+      checkCredit({ ...dealer, creditLimitMinor: 0, exposureMinor: 0 }, 100, true),
     ).toMatchObject({ reason: 'CASH_ONLY' });
   });
 

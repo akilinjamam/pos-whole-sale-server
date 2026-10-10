@@ -105,6 +105,22 @@ export const deliverDispatchSchema = z
   })
   .strict();
 
+/**
+ * Posting a challan. The dealer's credit is re-checked as the goods leave (Day 31); a holder of
+ * `order:creditOverride` may post past the limit with a reason, recorded on the order and audited.
+ */
+export const postDispatchSchema = z
+  .object({
+    creditOverrideReason: z
+      .string()
+      .trim()
+      .min(3, 'Say why, in a few words')
+      .max(300)
+      .optional(),
+  })
+  .strict();
+
+export type PostDispatchInput = z.infer<typeof postDispatchSchema>;
 export type DispatchLineInput = z.infer<typeof dispatchLineInputSchema>;
 export type TransportInput = z.infer<typeof transportSchema>;
 export type CreateDispatchInput = z.infer<typeof createDispatchSchema>;

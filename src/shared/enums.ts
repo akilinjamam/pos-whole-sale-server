@@ -292,6 +292,12 @@ export const DOC_SERIES = [
 ] as const;
 export type DocSeries = Member<typeof DOC_SERIES>;
 
+// ─── Audit (Day 31) ─────────────────────────────────────────────────────────────────────
+
+/** What the audit log records. Day 31: credit overrides; Day 39 adds the rest. */
+export const AUDIT_ACTIONS = ['CREDIT_OVERRIDE'] as const;
+export type AuditAction = Member<typeof AUDIT_ACTIONS>;
+
 // ─── API error codes ────────────────────────────────────────────────────────────────────
 
 export const ERROR_CODES = [

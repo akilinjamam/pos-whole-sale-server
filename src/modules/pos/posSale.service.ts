@@ -7,6 +7,7 @@ import { ApiError } from '../../lib/ApiError.js';
 import { nextDocNo } from '../../lib/numbering.js';
 import { withTransaction } from '../../lib/withTransaction.js';
 import { hasPermission } from '../../middleware/requirePermission.js';
+import { creditExposure } from '../../services/creditExposure.service.js';
 import { postLedgerEntries } from '../../services/partyLedger.service.js';
 import { postMovements } from '../../services/stock.service.js';
 import { resolveStockLines, trackingFor } from '../../services/stockLines.js';
@@ -512,16 +513,21 @@ export async function postPosSale(
       // the balance as it stands inside this transaction, not as it looked before it began.
       if (input.paymentMode === 'CREDIT' && party) {
         if (unpaidMinor > 0) {
-          const fresh = await Party.findById(party._id)
-            .select('currentBalanceMinor dealer')
-            .session(txn)
-            .lean();
+          const fresh = await Party.findById(party._id).select('dealer').session(txn).lean();
+          // The full exposure (Day 31): a dealer cannot step round their limit at the counter
+          // while confirmed orders wait in the warehouse.
+          // This sale's invoice is already written in this transaction; it is the new credit
+          // being judged, so it must not also count as an open invoice.
+          const exposure = await creditExposure(actor.orgId, party._id, {
+            session: txn,
+            excludeInvoiceId: invoiceId,
+          });
           const verdict = checkCredit(
             {
               creditHold: Boolean(fresh?.dealer?.creditHold),
               creditHoldReason: fresh?.dealer?.creditHoldReason ?? null,
               creditLimitMinor: fresh?.dealer?.creditLimitMinor ?? 0,
-              currentBalanceMinor: fresh?.currentBalanceMinor ?? 0,
+              exposureMinor: exposure.exposureMinor,
             },
             unpaidMinor,
             Boolean(org?.settings?.enforceCreditLimit),

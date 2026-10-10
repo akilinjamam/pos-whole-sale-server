@@ -15,6 +15,7 @@ import { dayIn, dayToDate } from '../../lib/period.js';
 import { withTransaction } from '../../lib/withTransaction.js';
 import { ORDER_STATUSES } from '../../shared/enums.js';
 import { locationScopeOf } from '../../middleware/requireLocation.js';
+import { writeAudit } from '../../services/audit.service.js';
 import { releaseReservation, reserveStock } from '../../services/stock.service.js';
 import { Dispatch } from '../dispatch/dispatch.model.js';
 import { Location } from '../location/location.model.js';
@@ -563,9 +564,12 @@ export async function confirmOrder(
       );
     }
 
-    // The balance as of this transaction, not as of the pricing read.
+    // The dealer's exposure as of this transaction, not as of the pricing read.
     const dealer = (await Party.findById(fresh.dealerPartyId).session(session).lean())!;
-    const credit = await creditPosition(actor, dealer, priced.grandTotalMinor);
+    const credit = await creditPosition(actor, dealer, priced.grandTotalMinor, {
+      session,
+      excludeOrderId: id,
+    });
     if (credit.verdict === 'ON_HOLD') assertNotOnHold(dealer);
 
     const overriding = credit.verdict !== 'OK' && credit.canOverride;
@@ -575,8 +579,10 @@ export async function confirmOrder(
         credit.message ?? 'Over the credit limit',
         {
           canOverride: true,
+          exposureMinor: credit.exposureMinor,
           exposureAfterMinor: credit.exposureAfterMinor,
           limitMinor: credit.limitMinor,
+          shortfallMinor: credit.shortfallMinor,
           balanceMinor: credit.balanceMinor,
         },
       );
@@ -584,7 +590,8 @@ export async function confirmOrder(
     const creditCheck: OrderCreditCheckDoc = {
       status: credit.verdict === 'OK' ? 'OK' : overriding ? 'OVERRIDDEN' : 'BLOCKED',
       checkedAt: new Date(),
-      outstandingMinor: credit.balanceMinor,
+      // Exposure before and with this order — what the decision was made on.
+      outstandingMinor: credit.exposureMinor,
       exposureMinor: credit.exposureAfterMinor,
       limitMinor: credit.limitMinor,
       overriddenByUserId: overriding ? actor.actorId : null,
@@ -611,7 +618,11 @@ export async function confirmOrder(
         reason: overrideReason,
       });
     }
-    return reserveAndConfirm(actor, fresh, lines, overrideReason, session);
+    const confirmed = await reserveAndConfirm(actor, fresh, lines, overrideReason, session);
+    if (overriding) {
+      await auditCreditOverride(session, actor, confirmed, 'CONFIRM', overrideReason!, credit);
+    }
+    return confirmed;
   });
   const [payload] = await serialize(actor, [result]);
   return payload!;
@@ -645,19 +656,22 @@ export async function approveOrder(
     }
     const dealer = (await Party.findById(order.dealerPartyId).session(session).lean())!;
     assertNotOnHold(dealer);
+    // The position *now* — the dealer may have paid, or ordered more, since the rep submitted it.
+    const credit = await creditPosition(actor, dealer, order.grandTotalMinor, {
+      session,
+      excludeOrderId: id,
+    });
 
     await WholesaleOrder.updateOne(
       { _id: id, orgId: actor.orgId },
       {
         $set: {
           creditCheck: {
-            ...(order.creditCheck ?? {
-              checkedAt: new Date(),
-              outstandingMinor: dealer.currentBalanceMinor,
-              exposureMinor: dealer.currentBalanceMinor + order.grandTotalMinor,
-              limitMinor: dealer.dealer?.creditLimitMinor ?? 0,
-            }),
             status: 'OVERRIDDEN',
+            checkedAt: new Date(),
+            outstandingMinor: credit.exposureMinor,
+            exposureMinor: credit.exposureAfterMinor,
+            limitMinor: credit.limitMinor,
             overriddenByUserId: actor.actorId,
             overrideReason: input.reason,
           },
@@ -666,10 +680,54 @@ export async function approveOrder(
       },
       { session },
     );
-    return reserveAndConfirm(actor, order, order.lines, input.reason, session);
+    const confirmed = await reserveAndConfirm(actor, order, order.lines, input.reason, session);
+    await auditCreditOverride(session, actor, confirmed, 'APPROVE', input.reason, credit);
+    return confirmed;
   });
   const [payload] = await serialize(actor, [result]);
   return payload!;
+}
+
+/**
+ * Mirror a credit override to the audit log (§8): who lent past the limit, on which order, by how
+ * much, and in their own words why. Written in the caller's transaction, so the override and its
+ * record land together.
+ */
+export async function auditCreditOverride(
+  session: ClientSession,
+  actor: RequestActor,
+  order: Pick<WholesaleOrderDoc, '_id' | 'docNo' | 'dealerPartyId' | 'grandTotalMinor'>,
+  stage: 'CONFIRM' | 'APPROVE' | 'DISPATCH',
+  reason: string,
+  credit: {
+    verdict: string;
+    limitMinor: number;
+    exposureMinor: number;
+    exposureAfterMinor: number;
+    shortfallMinor: number;
+  },
+  extra: Record<string, unknown> = {},
+): Promise<void> {
+  await writeAudit(session, actor, {
+    action: 'CREDIT_OVERRIDE',
+    entity: 'WholesaleOrder',
+    entityId: order._id,
+    docNo: order.docNo,
+    reason,
+    before: {
+      stage,
+      verdict: credit.verdict,
+      limitMinor: credit.limitMinor,
+      exposureMinor: credit.exposureMinor,
+      exposureAfterMinor: credit.exposureAfterMinor,
+      shortfallMinor: credit.shortfallMinor,
+    },
+    after: {
+      dealerPartyId: String(order.dealerPartyId),
+      orderTotalMinor: order.grandTotalMinor,
+      ...extra,
+    },
+  });
 }
 
 /** `POST /orders/:id/reject` — back to DRAFT for the rep to amend. Nothing was reserved. */

@@ -34,7 +34,7 @@ export const pack = asyncHandler(async (req, res) => {
 });
 
 export const post = asyncHandler(async (req, res) => {
-  sendData(res, await service.postDispatch(requestActorOf(req), idOf(req)));
+  sendData(res, await service.postDispatch(requestActorOf(req), idOf(req), {}, req.body));
 });
 
 export const cancel = asyncHandler(async (req, res) => {
